@@ -570,7 +570,7 @@ df_raw, meta, sheet_names = load_excel_smart(file_bytes)
 
 with st.sidebar:
     st.divider()
-    st.header("🧠 Lettura Excel")
+    st.header("Lettura Excel")
     override = st.checkbox("Override manuale (foglio + riga header)", value=False)
 
 if override:
@@ -600,7 +600,7 @@ col_ruolo = find_col(df_raw, ["DESC. RUOLO", "RUOLO"], contains=True)
 
 with st.sidebar:
     st.divider()
-    st.header("🎛️ Filtri (dataset)")
+    st.header("Filtri")
 
     def opts(col):
         return sorted(df_raw[col].dropna().astype(str).unique()) if col else []
@@ -646,7 +646,7 @@ analisi, df_scope, CAUSE_COLS = build_detail_and_analisi(df_f, only_in_force=onl
 # KPI globali
 k_global = compute_kpi(df_scope, day_hours=day_hours, ore_annue_fte=ore_annue_fte, cause_cols=CAUSE_COLS)
 
-st.subheader("📌 KPI (aggiornati dai filtri)")
+st.subheader("KPI (aggiornati dai filtri)")
 with st.container(border=True):
     r1 = st.columns(4)
     r1[0].metric("N Operatori", f"{k_global['n_operatori']}")
@@ -663,9 +663,9 @@ with st.container(border=True):
 st.divider()
 
 tab1, tab2, tab3 = st.tabs([
-    "📋 ANALISI_DOTAZIONI (ricostruita)",
-    "📊 Vista Generale (interattiva)",
-    "👤 Dettaglio Reparto & Persone"
+    "Analisi Dotazioni",
+    "Vista Generale",
+    "Dettaglio Reparto"
 ])
 
 # =========================
@@ -679,7 +679,7 @@ with tab1:
     st.dataframe(analisi_show, use_container_width=True, height=520)
 
     st.download_button(
-        "⬇️ Scarica CSV",
+        "Scarica CSV",
         data=analisi_show.to_csv(index=False).encode("utf-8"),
         file_name="ANALISI_DOTAZIONI_ricostruita_con_totali.csv",
         mime="text/csv",
@@ -689,7 +689,7 @@ with tab1:
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         analisi_show.to_excel(writer, index=False, sheet_name="ANALISI_DOTAZIONI")
     st.download_button(
-        "⬇️ Scarica Excel",
+        "Scarica Excel",
         data=buf.getvalue(),
         file_name="ANALISI_DOTAZIONI_ricostruita_con_totali.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -853,7 +853,7 @@ with tab3:
 
     # download
     st.download_button(
-        "⬇️ Scarica persone (CSV)",
+        "Scarica persone (CSV)",
         data=df_people.to_csv(index=False).encode("utf-8"),
         file_name=f"persone_{dim_label.lower()}_{str(chosen_dim)[:40]}.csv".replace(" ", "_"),
         mime="text/csv",
@@ -862,7 +862,7 @@ with tab3:
     with pd.ExcelWriter(bufp, engine="openpyxl") as writer:
         df_people.to_excel(writer, index=False, sheet_name="PERSONE")
     st.download_button(
-        "⬇️ Scarica persone (Excel)",
+        "Scarica persone (Excel)",
         data=bufp.getvalue(),
         file_name=f"persone_{dim_label.lower()}_{str(chosen_dim)[:40]}.xlsx".replace(" ", "_"),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

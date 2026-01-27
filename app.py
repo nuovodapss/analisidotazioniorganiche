@@ -46,12 +46,10 @@ def find_col(df: pd.DataFrame, wanted, contains=True):
     cols_norm = [norm(c) for c in cols]
     wanted_norm = [norm(w) for w in wanted]
 
-    # match esatto
     for w in wanted_norm:
         if w in cols_norm:
             return cols[cols_norm.index(w)]
 
-    # match "contiene"
     if contains:
         for i, c in enumerate(cols_norm):
             if any(w in c for w in wanted_norm):
@@ -75,9 +73,7 @@ def to_num_series(s: pd.Series) -> pd.Series:
     mask_comma = ~mask_both & x.str.contains(",", regex=False)
     x.loc[mask_comma] = x.loc[mask_comma].str.replace(",", ".", regex=False)
 
-    # spazi migliaia
     x = x.str.replace(" ", "", regex=False)
-
     return pd.to_numeric(x, errors="coerce").fillna(0)
 
 
@@ -86,8 +82,17 @@ def z(df: pd.DataFrame) -> pd.Series:
 
 
 def style_red_black(fig):
-    # Barre rosse con bordo nero (vale per grafici a barre/istogrammi)
     fig.update_traces(marker_color="red", marker_line_color="black", marker_line_width=1)
+    return fig
+
+
+def style_scatter_red_black(fig, size_max=18):
+    fig.update_traces(
+        mode="markers",
+        marker=dict(color="red", line=dict(color="black", width=1), sizemode="area", sizeref=None),
+    )
+    fig.update_layout()
+    # plotly express imposta size; non forziamo colori ma i marker sì
     return fig
 
 
@@ -180,7 +185,6 @@ def simplify_qualifica(q: str, reparto: str) -> str | None:
 def build_detail_and_analisi(df_raw: pd.DataFrame, only_in_force: bool):
     df = df_raw.copy()
 
-    # colonne principali
     c_pt = find_col(df, ["% PART-TIME", "% PART TIME", "PART-TIME", "PERC PART"], contains=True)
     c_rep = find_col(df, ["REPARTO"], contains=True)
     c_cdr = find_col(df, ["CDR_DESC", "CDR DESC", "CDR"], contains=True)
@@ -350,16 +354,12 @@ def build_detail_and_analisi(df_raw: pd.DataFrame, only_in_force: bool):
 
 
 def compute_kpi(df_scope: pd.DataFrame, cause_cols: list[str], day_hours: float, ore_annue_fte: float):
-    # headcount
     c_matr = find_col(df_scope, ["MATRICOLA"], contains=True)
     n_operatori = int(df_scope[c_matr].nunique()) if c_matr and c_matr in df_scope.columns else int(len(df_scope))
 
     fte_tot = float(df_scope["FTE"].sum()) if "FTE" in df_scope.columns else 0.0
-
-    # ore teoriche: FTE * 1470 (default)
     ore_teo_tot = fte_tot * ore_annue_fte if fte_tot > 0 else 0.0
 
-    # riduzione per part-time (headcount - fte)
     fte_persi_pt = max(0.0, float(n_operatori) - fte_tot)
     pct_rid_pt = (fte_persi_pt / float(n_operatori) * 100) if n_operatori > 0 else 0.0
 
@@ -369,7 +369,6 @@ def compute_kpi(df_scope: pd.DataFrame, cause_cols: list[str], day_hours: float,
     fte_assenti = (abs_tot_ore / ore_annue_fte) if ore_annue_fte > 0 else np.nan
     fte_disp = (fte_tot - fte_assenti) if isinstance(fte_assenti, float) and not np.isnan(fte_assenti) else np.nan
 
-    # ferie
     ferie_mat = float(df_scope["FERIE_MAT_2025"].sum()) if "FERIE_MAT_2025" in df_scope.columns else 0.0
     ferie_fruite = float(df_scope["FERIE_FRUITE_2025"].sum()) if "FERIE_FRUITE_2025" in df_scope.columns else 0.0
     ferie_res_ore = float(df_scope["FERIE_RES_0101"].sum()) if "FERIE_RES_0101" in df_scope.columns else 0.0
@@ -378,7 +377,6 @@ def compute_kpi(df_scope: pd.DataFrame, cause_cols: list[str], day_hours: float,
     res_giorni = (ferie_res_ore / day_hours) if day_hours > 0 else np.nan
     res_giorni_media = (res_giorni / n_operatori) if n_operatori > 0 and not np.isnan(res_giorni) else np.nan
 
-    # breakdown causali: ore -> FTE persi (ore/1470) e % su FTE tot
     breakdown = []
     if ore_annue_fte > 0 and fte_tot > 0:
         for c in cause_cols:
@@ -386,12 +384,8 @@ def compute_kpi(df_scope: pd.DataFrame, cause_cols: list[str], day_hours: float,
                 ore = float(df_scope[c].sum())
                 fte_lost = ore / ore_annue_fte
                 pct = (fte_lost / fte_tot) * 100
-                breakdown.append({
-                    "Causale": c.replace("ABS_", "").replace("_", " ").title(),
-                    "Ore": ore,
-                    "FTE_persi": fte_lost,
-                    "%_su_FTE": pct
-                })
+                breakdown.append({"Causale": c.replace("ABS_", "").replace("_", " ").title(),
+                                  "Ore": ore, "FTE_persi": fte_lost, "%_su_FTE": pct})
     df_break = pd.DataFrame(breakdown).sort_values("%_su_FTE", ascending=False) if breakdown else pd.DataFrame(
         columns=["Causale", "Ore", "FTE_persi", "%_su_FTE"]
     )
@@ -559,7 +553,8 @@ with st.container(border=True):
     r1 = st.columns(4)
     r1[0].metric("N Operatori", f"{k['n_operatori']}")
     r1[1].metric("FTE totali", f"{k['fte_tot']:.2f}")
-    r1[2].metric("Riduzione organico (Part-time)", f"{k['fte_persi_pt']:.2f}", f"{k['pct_rid_pt']:.1f}%")
+    r1[2].metric("Riduzione organico (Part-time)", f"{max(0.0, k['n_operatori'] - k['fte_tot']):.2f}",
+                 f"{(max(0.0, k['n_operatori'] - k['fte_tot']) / k['n_operatori'] * 100) if k['n_operatori'] else 0.0:.1f}%")
     r1[3].metric("Ore teoriche totali (FTE×1470)", f"{k['ore_teo_tot']:.0f}")
 
     r2 = st.columns(4)
@@ -581,7 +576,6 @@ tab1, tab2 = st.tabs(["📋 ANALISI_DOTAZIONI (ricostruita)", "📊 Vista Genera
 
 with tab1:
     st.subheader("Tabella ANALISI_DOTAZIONI (derivata dal prospetto)")
-
     df_total = totals_row_from_scope(df_scope)
     analisi_show = pd.concat([analisi, df_total], ignore_index=True)
 
@@ -617,7 +611,7 @@ with tab2:
     dim_col = col_rep_scope if col_rep_scope else "SERVIZIO"
     st.caption(f"Aggregazione per: **{dim_label}**")
 
-    top_n = st.slider(f"Top {dim_label} da mostrare nei grafici", min_value=5, max_value=60, value=20, step=5)
+    top_n = st.slider(f"Top {dim_label} nei grafici", min_value=5, max_value=60, value=20, step=5)
 
     # Aggregazione per reparto/servizio
     c_matr = find_col(df_scope, ["MATRICOLA"], contains=True)
@@ -647,9 +641,95 @@ with tab2:
         np.nan
     )
 
+    # ==============
+    # SCATTER
+    # ==============
+    st.subheader("Scatter (interattivo)")
+    st.caption("Pallini rossi con bordo nero. Dimensione bolla = FTE.")
+
+    scatter_opts = {
+        "Assenteismo %": "ASSENTEISMO_%",
+        "Straordinario (ore/FTE)": "STRAORD_ORE_X_FTE",
+        "Prestazioni aggiuntive (ore/FTE)": "PREST_ORE_X_FTE",
+        "Ferie residue (giorni/testa)": "FERIE_RES_GIORNI_X_TESTA",
+        "FTE persi per assenze": "FTE_PERSI_ASSENZE",
+    }
+
+    c_sc1, c_sc2, c_sc3 = st.columns(3)
+    x_metric = c_sc1.selectbox("Asse X", list(scatter_opts.keys()), index=0)
+    y_metric = c_sc2.selectbox("Asse Y", list(scatter_opts.keys()), index=1)
+    size_metric = c_sc3.selectbox("Dimensione (bolla)", ["FTE", "OPERATORI"], index=0)
+
+    df_sc = df_dim.dropna(subset=[scatter_opts[x_metric], scatter_opts[y_metric]]).copy()
+    if len(df_sc) == 0:
+        st.info("Nessun punto disponibile (mancano valori per le metriche selezionate).")
+    else:
+        fig_sc = px.scatter(
+            df_sc,
+            x=scatter_opts[x_metric],
+            y=scatter_opts[y_metric],
+            size=size_metric,
+            hover_name=dim_label,
+            hover_data={
+                dim_label: True,
+                "OPERATORI": True,
+                "FTE": ":.2f",
+                "ASSENTEISMO_%": ":.2f",
+                "FTE_PERSI_ASSENZE": ":.2f",
+                "STRAORD_ORE_X_FTE": ":.2f",
+                "PREST_ORE_X_FTE": ":.2f",
+                "FERIE_RES_GIORNI_X_TESTA": ":.2f",
+            },
+            title=f"{y_metric} vs {x_metric} (bolla={size_metric})"
+        )
+        fig_sc.update_traces(marker=dict(color="red", line=dict(color="black", width=1)))
+        st.plotly_chart(fig_sc, use_container_width=True)
+
+    st.divider()
+
+    # ==============
+    # TABELLA PER REPARTO / SERVIZIO (ordinabile + download)
+    # ==============
+    st.subheader(f"Tabella per {dim_label} (ordinabile)")
+    df_dim_table = df_dim.copy()
+
+    # colonne in ordine "cruscotto"
+    df_dim_table = df_dim_table[[
+        dim_label, "OPERATORI", "FTE",
+        "ASSENTEISMO_%", "FTE_PERSI_ASSENZE",
+        "STRAORD_ORE_X_FTE", "PREST_ORE_X_FTE",
+        "FERIE_RES_GIORNI_X_TESTA",
+        "STRAORD_TOT_ORE", "ST_REC", "ST_PD", "ST_PAG",
+        "ASSENZE_ORE", "PREST_AGG_ORE",
+        "FERIE_MAT_ORE", "FERIE_FRUITE_ORE", "FERIE_RES_ORE",
+    ]]
+
+    # mostra
+    st.dataframe(df_dim_table.sort_values("ASSENTEISMO_%", ascending=False), use_container_width=True, height=380)
+
+    # download
+    st.download_button(
+        f"⬇️ Scarica tabella {dim_label} (CSV)",
+        data=df_dim_table.to_csv(index=False).encode("utf-8"),
+        file_name=f"tabella_{dim_label.lower()}_cruscotto.csv",
+        mime="text/csv",
+    )
+    buf2 = io.BytesIO()
+    with pd.ExcelWriter(buf2, engine="openpyxl") as writer:
+        df_dim_table.to_excel(writer, index=False, sheet_name=f"{dim_label}_CRUSCOTTO")
+    st.download_button(
+        f"⬇️ Scarica tabella {dim_label} (Excel)",
+        data=buf2.getvalue(),
+        file_name=f"tabella_{dim_label.lower()}_cruscotto.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    st.divider()
+
     # -------------------------
     # Torte (totale filtrato)
     # -------------------------
+    st.subheader("Torte (totale filtrato)")
     colA, colB = st.columns(2)
 
     ferie_mat = float(df_scope["FERIE_MAT_2025"].sum()) if "FERIE_MAT_2025" in df_scope.columns else 0.0
@@ -661,7 +741,7 @@ with tab2:
         values=[ferie_fruite, ferie_non_fruite],
         hole=0.35
     )])
-    fig_pie_ferie.update_layout(title="Ferie fruite vs maturate non fruite (totale filtrato)")
+    fig_pie_ferie.update_layout(title="Ferie fruite vs maturate non fruite")
     colA.plotly_chart(fig_pie_ferie, use_container_width=True)
 
     ore_teo_tot = float(k["ore_teo_tot"])
@@ -673,40 +753,38 @@ with tab2:
         values=[abs_tot, ore_disp],
         hole=0.35
     )])
-    fig_pie_ass.update_layout(title="Assenteismo su 1470h/FTE (totale filtrato)")
+    fig_pie_ass.update_layout(title="Assenteismo su 1470h/FTE (ore assenza vs ore disponibili)")
     colB.plotly_chart(fig_pie_ass, use_container_width=True)
 
     st.divider()
 
     # -------------------------
-    # Bar chart per reparto (non istogrammi di conteggio)
+    # Bar chart per reparto (Top N)
     # -------------------------
+    st.subheader(f"Bar chart per {dim_label} (Top {top_n})")
+
     c1, c2 = st.columns(2)
 
-    # Assenteismo % (Top N)
     df_top = df_dim.sort_values("ASSENTEISMO_%", ascending=False).head(top_n)
-    fig1 = px.bar(df_top, x=dim_label, y="ASSENTEISMO_%", title=f"Assenteismo % (Top {top_n} {dim_label})")
+    fig1 = px.bar(df_top, x=dim_label, y="ASSENTEISMO_%", title=f"Assenteismo % – Top {top_n} {dim_label}")
     style_red_black(fig1)
     fig1.update_layout(xaxis_tickangle=45, yaxis_title="%")
     c1.plotly_chart(fig1, use_container_width=True)
 
-    # FTE persi (ore/1470) (Top N)
     df_top2 = df_dim.sort_values("FTE_PERSI_ASSENZE", ascending=False).head(top_n)
-    fig2 = px.bar(df_top2, x=dim_label, y="FTE_PERSI_ASSENZE", title=f"FTE persi per assenze (Top {top_n} {dim_label})")
+    fig2 = px.bar(df_top2, x=dim_label, y="FTE_PERSI_ASSENZE", title=f"FTE persi per assenze – Top {top_n} {dim_label}")
     style_red_black(fig2)
     fig2.update_layout(xaxis_tickangle=45, yaxis_title="FTE persi")
     c2.plotly_chart(fig2, use_container_width=True)
 
     c3, c4 = st.columns(2)
 
-    # Straordinario ore/FTE
     df_top3 = df_dim.sort_values("STRAORD_ORE_X_FTE", ascending=False).head(top_n)
     fig3 = px.bar(df_top3, x=dim_label, y="STRAORD_ORE_X_FTE", title=f"Straordinario (ore per FTE) – Top {top_n} {dim_label}")
     style_red_black(fig3)
     fig3.update_layout(xaxis_tickangle=45, yaxis_title="Ore/FTE")
     c3.plotly_chart(fig3, use_container_width=True)
 
-    # Prestazioni aggiuntive ore/FTE
     df_top4 = df_dim.sort_values("PREST_ORE_X_FTE", ascending=False).head(top_n)
     fig4 = px.bar(df_top4, x=dim_label, y="PREST_ORE_X_FTE", title=f"Prestazioni aggiuntive (ore per FTE) – Top {top_n} {dim_label}")
     style_red_black(fig4)
@@ -715,9 +793,8 @@ with tab2:
 
     c5, c6 = st.columns(2)
 
-    # Ferie residue giorni/testa
     df_top5 = df_dim.sort_values("FERIE_RES_GIORNI_X_TESTA", ascending=False).head(top_n)
-    fig5 = px.bar(df_top5, x=dim_label, y="FERIE_RES_GIORNI_X_TESTA", title=f"Ferie residue al 01/01/2026 (giorni per testa) – Top {top_n} {dim_label}")
+    fig5 = px.bar(df_top5, x=dim_label, y="FERIE_RES_GIORNI_X_TESTA", title=f"Ferie residue (giorni per testa) – Top {top_n} {dim_label}")
     style_red_black(fig5)
     fig5.update_layout(xaxis_tickangle=45, yaxis_title="Giorni/testa")
     c5.plotly_chart(fig5, use_container_width=True)
@@ -748,7 +825,7 @@ with tab2:
     st.divider()
 
     # -------------------------
-    # Top causali (spostate qui)
+    # Top causali (in Vista Generale)
     # -------------------------
     st.subheader("Top causali assenza (impatto su organico)")
     if not k["df_break"].empty:
@@ -772,7 +849,7 @@ with tab2:
     st.divider()
 
     # -------------------------
-    # Straordinario totale – composizione (intero dataset filtrato)
+    # Straordinario totale – composizione (totale filtrato)
     # -------------------------
     st.subheader("Straordinario totale – composizione (totale filtrato)")
     st_rec_tot = float(df_scope["STRAORD_REC"].sum())

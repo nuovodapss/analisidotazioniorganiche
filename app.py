@@ -438,18 +438,20 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: fl
     c_prof = find_col(df_sub, ["PROFILO"], contains=True)
     c_qual = find_col(df_sub, ["QUALIFICA.1", "QUALIFICA"], contains=True)
 
-    # chiave persona
-    if c_matr:
+    # --- chiave persona ---
+    if c_matr and c_matr in df_sub.columns:
         key_cols = [c_matr]
     else:
-        # fallback (meno robusto)
-        key_cols = [c_cogn, c_nome] if c_cogn and c_nome else []
+        key_cols = []
+        if c_cogn and c_cogn in df_sub.columns:
+            key_cols.append(c_cogn)
+        if c_nome and c_nome in df_sub.columns:
+            key_cols.append(c_nome)
 
     if not key_cols:
-        # se proprio non esiste nulla, ritorna vuoto
         return pd.DataFrame()
 
-    # aggrega per persona
+    # --- aggregazioni per persona ---
     agg_dict = {
         "FTE": ("FTE", "sum"),
         "ASSENZE_ORE": ("ASSENZE_TOT_ORE", "sum"),
@@ -462,26 +464,42 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: fl
         "PREST_AGG_ORE": ("PREST_AGG_ORE", "sum"),
     }
 
-    # aggiungo causali
     for c in cause_cols:
         if c in df_sub.columns:
             agg_dict[c] = (c, "sum")
 
     gb = df_sub.groupby(key_cols, dropna=False).agg(**{k: v for k, v in agg_dict.items()}).reset_index()
 
-    # aggiungo colonne anagrafiche “first”
+    # --- helper: aggiunge colonna "first" solo se serve e senza collisioni ---
     def add_first(colname, outname):
-        if colname and colname in df_sub.columns:
-            firsts = df_sub.groupby(key_cols, dropna=False)[colname].first().reset_index().rename(columns={colname: outname})
-            return gb.merge(firsts, on=key_cols, how="left")
-        return gb
+        # se col già presente nel risultato, non fare nulla
+        if outname in gb.columns:
+            return gb
+        # se la col di origine non esiste, non fare nulla
+        if not colname or colname not in df_sub.columns:
+            return gb
+        # se la col di origine è già una key (quindi è già in gb), non fare nulla
+        if colname in key_cols:
+            # in questo caso il nome della colonna in gb è colname, non outname
+            # se vuoi rinominare per uniformare, lo facciamo qui senza duplicare
+            if outname != colname and colname in gb.columns and outname not in gb.columns:
+                return gb.rename(columns={colname: outname})
+            return gb
+
+        # merge first-value
+        firsts = (
+            df_sub.groupby(key_cols, dropna=False)[colname]
+            .first()
+            .reset_index(name=outname)  # ✅ evita reset_index() che prova a inserire colname
+        )
+        return gb.merge(firsts, on=key_cols, how="left")
 
     gb = add_first(c_cogn, "COGNOME")
     gb = add_first(c_nome, "NOME")
     gb = add_first(c_prof, "PROFILO")
     gb = add_first(c_qual, "QUALIFICA_RAW")
 
-    # metriche
+    # --- metriche individuali ---
     gb["ORE_TEORICHE"] = gb["FTE"] * ore_annue_fte
     gb["ASSENTEISMO_%"] = np.where(gb["ORE_TEORICHE"] > 0, gb["ASSENZE_ORE"] / gb["ORE_TEORICHE"] * 100, np.nan)
     gb["FTE_ASSENTI"] = gb["ASSENZE_ORE"] / ore_annue_fte if ore_annue_fte > 0 else np.nan
@@ -494,7 +512,7 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: fl
     gb["FERIE_RES_GIORNI"] = np.where(day_hours > 0, gb["FERIE_RES_ORE"] / day_hours, np.nan)
     gb["FERIE_RES_GIORNI_X_FTE"] = np.where(gb["FTE"] > 0, gb["FERIE_RES_GIORNI"] / gb["FTE"], np.nan)
 
-    # colonna display nome
+    # --- display PERSONA ---
     if "COGNOME" in gb.columns and "NOME" in gb.columns:
         gb["PERSONA"] = gb["COGNOME"].astype(str).str.strip() + " " + gb["NOME"].astype(str).str.strip()
     elif c_matr and c_matr in gb.columns:
@@ -502,7 +520,7 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: fl
     else:
         gb["PERSONA"] = "N/D"
 
-    # ordina colonne principali
+    # ordine colonne
     cols_front = []
     if c_matr and c_matr in gb.columns:
         cols_front.append(c_matr)
@@ -518,11 +536,9 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: fl
         "ST_REC", "ST_PD", "ST_PAG",
     ]
     cols_metrics = [c for c in cols_metrics if c in gb.columns]
-
     other_cols = [c for c in gb.columns if c not in cols_front + cols_metrics]
-    gb = gb[cols_front + cols_metrics + other_cols]
 
-    return gb
+    return gb[cols_front + cols_metrics + other_cols]
 
 
 # =========================

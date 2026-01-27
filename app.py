@@ -544,7 +544,7 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: fl
 # =========================
 # UI
 # =========================
-st.title("🩺 Cruscotto Dotazioni Organiche – Upload Excel")
+st.title("Cruscotto Dotazioni Organiche")
 
 with st.sidebar:
     st.header("📤 Caricamento")

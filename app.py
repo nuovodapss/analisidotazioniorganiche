@@ -60,10 +60,6 @@ def load_excel(file) -> pd.DataFrame:
     df = df.cleancols.apply()
     return df
 
-with st.expander("🔎 Debug: colonne lette dal file"):
-    st.write(list(df_raw.columns))
-
-
 def simplify_qualifica(q1: str, reparto: str):
     if pd.isna(q1):
         return None

@@ -1,19 +1,68 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
 import re
+import numpy as np
+import pandas as pd
 
-st.set_page_config(
-    page_title="Cruscotto Dotazioni Organiche",
-    layout="wide"
-)
+def normalize_colname(s: str) -> str:
+    s = str(s)
+    s = s.replace("\u00a0", " ")  # NBSP
+    for h in ["–", "—", "-", "−"]:
+        s = s.replace(h, "-")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-# ----------------------------
-# Helpers
-# ----------------------------
-def to_num(s):
-    return pd.to_numeric(s, errors="coerce").fillna(0)
+def to_num(x):
+    # accetta Series o scalari; restituisce Series di float (o float) con NaN -> 0
+    if isinstance(x, (int, float, np.number)):
+        return float(x)
+    s = pd.to_numeric(x, errors="coerce")
+    if isinstance(s, pd.Series):
+        return s.fillna(0)
+    return 0.0 if pd.isna(s) else float(s)
+
+def zeros_like(df: pd.DataFrame):
+    return pd.Series(0.0, index=df.index)
+
+def resolve_col(df: pd.DataFrame, candidates, contains_ok=True):
+    if isinstance(candidates, str):
+        candidates = [candidates]
+
+    cols = list(df.columns)
+    norm_map = {normalize_colname(c).lower(): c for c in cols}
+
+    # match esatto (normalizzato)
+    for w in candidates:
+        k = normalize_colname(w).lower()
+        if k in norm_map:
+            return norm_map[k]
+
+    # match "contains" (utile per varianti tipo "% PART TIME" o "% PART-TIME ")
+    if contains_ok:
+        wanted_norm = [normalize_colname(w).lower() for w in candidates]
+        for c in cols:
+            c_norm = normalize_colname(c).lower()
+            if any(w in c_norm for w in wanted_norm):
+                return c
+
+    return None
+
+@pd.api.extensions.register_dataframe_accessor("cleancols")
+class _CleanColsAccessor:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def apply(self):
+        self._obj.columns = [normalize_colname(c) for c in self._obj.columns]
+        return self._obj
+
+@st.cache_data
+def load_excel(file) -> pd.DataFrame:
+    df = pd.read_excel(file, sheet_name=0)
+    df = df.cleancols.apply()
+    return df
+
+with st.expander("🔎 Debug: colonne lette dal file"):
+    st.write(list(df_raw.columns))
+
 
 def simplify_qualifica(q1: str, reparto: str):
     if pd.isna(q1):
@@ -32,122 +81,103 @@ def simplify_qualifica(q1: str, reparto: str):
     if "fisioterap" in s:
         return "FISOTERAP"
     if ("operatore tecnico" in s) or ("operatore tecn. special" in s):
-        # in AAT è autista
         if "aat" in rep:
             return "AUTISTI"
         return "OSS/OT"
 
     return str(q1)
 
-def service_from_row(cdr, reparto):
-    s = f"{cdr} {reparto}".lower()
-
-    if "endoscopia digestiva" in s:
-        return "ENDOSCOPIA DIGESTIVA"
-    if "chirurgia generale" in s or "ortopedia" in s:
-        return "AREA CHIRURGICA + sala gessi"
-    if "pediatria" in s:
-        return "PEDIATRIA"
-    if "pronto soccorso" in s:
-        return "PRONTO SOCCORSO + AAT 118"
-    if "aat118" in s or "aat - 118" in s or "aat poop" in s:
-        return "AAT - 118"
-    if "anestesia" in s and "rianimazione" in s:
-        return "SALA OPERATORIA"
-    if "area intensiva" in s:
-        return "TERAPIA INTENSIVA"
-    if "medicina generale" in s:
-        return "MEDICINA INTERNA + DH"
-    if "cardiologia" in s:
-        return "CARDIOLOGIA - UTIC - AMBULAT"
-    if "radiologia" in s:
-        return "RADIOLOGIA"
-    if "laboratorio analisi" in s:
-        return "LABORATORIO"
-    if "riabilitazione" in s:
-        return "RIABILITAZIONE"
-    if "ds04-dapss" in s or "daps" in s:
-        return "POLIAMBULATORI + TRASPORTI"
-    if "d701-psichiatria adolescenti" in s:
-        return "PSICHIATRIA ADOLESCENTI - SPDC"
-    if re.search(r"\bd702-psichiatria\b", s):
-        return "COMUNITA' - CPS -CD"
-
-    return None
-
-
-@st.cache_data
-def load_excel(file) -> pd.DataFrame:
-    df = pd.read_excel(file, sheet_name=0)
-    return df
-
 def build_analisi_dotazioni(df_raw: pd.DataFrame, only_in_force=True):
     df = df_raw.copy()
 
-    # numeric casting
-    num_cols = [c for c in df.columns if c not in [
-        "STABILIMENTO", "REPARTO", "DESC. RUOLO", "QUALIFICA", "DESC. AREA",
-        "DESC. POSIZIONE", "COGNOME", "NOME", "TIPO DI PART-TIME",
-        "DATA DAL", "DATA AL", "DATA ASSUNZIONE", "DATA CESSAZIONE",
-        "CDR_DESC", "DESC. DIP.", "CODICE FISCALE"
-    ]]
-    for c in num_cols:
-        df[c] = pd.to_numeric(df[c], errors="ignore")
+    # risoluzione colonne (robusta)
+    col_pt = resolve_col(df, ["% PART-TIME", "% PART TIME", "PERC PART-TIME", "PART-TIME"], contains_ok=True)
+    col_qual2 = resolve_col(df, ["QUALIFICA.1", "QUALIFICA"], contains_ok=True)
+    col_rep = resolve_col(df, ["REPARTO"], contains_ok=True)
+    col_cdr = resolve_col(df, ["CDR_DESC", "CDR DESC", "CDR"], contains_ok=True)
 
-    # derived fields
-    df["FTE"] = to_num(df["% PART-TIME"]).replace(0, 100) / 100
+    # FTE
+    if col_pt is None:
+        df["FTE"] = 1.0
+    else:
+        pt = to_num(df[col_pt])
+        # se 0 o mancante -> consideriamo 100
+        pt = pt.where(pt > 0, 100)
+        df["FTE"] = pt / 100
 
-    df["FERIE_MAT_2025"] = to_num(df["FERIE"]) + to_num(df["FERIE RX"])
-    df["FERIE_FRUITE_2025"] = to_num(df["FERIE GODUTE TOTALE"]) + to_num(df["FERIE GODUTE RX"])
-    df["FERIE_RES_0101"] = to_num(df["FERIE RES."]) + to_num(df["FERIE RX RES."]) + to_num(df["FERIE AP RES."])
+    # ferie
+    col_ferie = resolve_col(df, ["FERIE"], True)
+    col_ferie_rx = resolve_col(df, ["FERIE RX"], True)
+    col_ferie_god_tot = resolve_col(df, ["FERIE GODUTE TOTALE"], True)
+    col_ferie_god_rx = resolve_col(df, ["FERIE GODUTE RX"], True)
+    col_ferie_res = resolve_col(df, ["FERIE RES."], True)
+    col_ferie_rx_res = resolve_col(df, ["FERIE RX RES."], True)
+    col_ferie_ap_res = resolve_col(df, ["FERIE AP RES."], True)
+
+    df["FERIE_MAT_2025"] = to_num(df[col_ferie]) + to_num(df[col_ferie_rx])
+    df["FERIE_FRUITE_2025"] = to_num(df[col_ferie_god_tot]) + to_num(df[col_ferie_god_rx])
+    df["FERIE_RES_0101"] = to_num(df[col_ferie_res]) + to_num(df[col_ferie_rx_res]) + to_num(df[col_ferie_ap_res])
+
+    # assenze principali (se qualche colonna manca -> 0)
+    def s(colname):
+        c = resolve_col(df, [colname], True)
+        return to_num(df[c]) if c else zeros_like(df)
 
     df["ASSENZE_MAL104_ECC"] = (
-        to_num(df["MALATTIA"]) +
-        to_num(df["MALATTIA FIGLIO"]) +
-        to_num(df["LEGGE 104"]) +
-        to_num(df["PERMESSI"]) +
-        to_num(df["AGGIOR."]) +
-        to_num(df["INF./MAL.SERV"]) +
-        to_num(df["CAR.PUBBLICA"]) +
-        to_num(df.get("INFORTUNIO COVID", 0)) +
-        to_num(df.get("MALATTIA COVID", 0))
+        s("MALATTIA") +
+        s("MALATTIA FIGLIO") +
+        s("LEGGE 104") +
+        s("PERMESSI") +
+        s("AGGIOR.") +
+        s("INF./MAL.SERV") +
+        s("CAR.PUBBLICA") +
+        s("INFORTUNIO COVID") +
+        s("MALATTIA COVID")
     )
 
-    df["ASP_GRAV_PUER_DIST"] = to_num(df["RECUPERO"]) + to_num(df["MISSIONE SOLO SERVIZIO"])
+    df["ASP_GRAV_PUER_DIST"] = s("RECUPERO") + s("MISSIONE SOLO SERVIZIO")
 
-    df["STRAORD_REC"] = to_num(df["ORE DA RECUP. PROG."])
-    df["STRAORD_PD"] = to_num(df["STR. PD. PROG."])
-    df["STRAORD_PAG"] = to_num(df["STR. PROG."])
-    df["FEST_PAG"] = to_num(df["FEST. INFRASETT. A PAGAMENTO"])
-    df["FEST_REC"] = to_num(df["FEST. INFRASETT. A RECUPERO"])
+    # straordinari / festivi
+    df["STRAORD_REC"] = s("ORE DA RECUP. PROG.")
+    df["STRAORD_PD"] = s("STR. PD. PROG.")
+    df["STRAORD_PAG"] = s("STR. PROG.")
+    df["FEST_PAG"] = s("FEST. INFRASETT. A PAGAMENTO")
+    df["FEST_REC"] = s("FEST. INFRASETT. A RECUPERO")
 
-    # Mapping servizio + qualifica
+    # QUALIFICA semplificata
     df["QUALIFICA_S"] = [
         simplify_qualifica(q1, rep)
-        for q1, rep in zip(df["QUALIFICA.1"], df["REPARTO"])
-    ]
-    df["SERVIZIO"] = [
-        service_from_row(cdr, rep)
-        for cdr, rep in zip(df["CDR_DESC"], df["REPARTO"])
+        for q1, rep in zip(df[col_qual2] if col_qual2 else [None]*len(df),
+                           df[col_rep] if col_rep else [None]*len(df))
     ]
 
+    # ✅ UUOO/SERVIZIO automatico e scalabile: CDR_DESC (fallback REPARTO)
+    if col_cdr and col_rep:
+        df["SERVIZIO"] = df[col_cdr].astype(str).str.strip()
+        df.loc[df["SERVIZIO"].isin(["", "nan", "None"]), "SERVIZIO"] = df[col_rep].astype(str).str.strip()
+    elif col_cdr:
+        df["SERVIZIO"] = df[col_cdr].astype(str).str.strip()
+    else:
+        df["SERVIZIO"] = df[col_rep].astype(str).str.strip()
+
+    # scope qualifica (puoi allargare)
     target_qual = {"INFERMERE", "OSS", "AUTISTI", "TSRM", "TSLB", "FISOTERAP", "OSS/OT"}
     df_scope = df[df["SERVIZIO"].notna() & df["QUALIFICA_S"].isin(target_qual)].copy()
 
-    if only_in_force:
-        max_data = df_scope["DATA AL"].max()
-        df_scope = df_scope[df_scope["DATA AL"] == max_data].copy()
+    # opzionale: solo in forza a fine periodo
+    col_data_al = resolve_col(df_scope, ["DATA AL"], True)
+    if only_in_force and col_data_al:
+        max_data = df_scope[col_data_al].max()
+        df_scope = df_scope[df_scope[col_data_al] == max_data].copy()
 
-    # regola: OSS/OT viene mostrato come "OSS" in quasi tutti i servizi
+    # regola: OSS/OT -> OSS (se vuoi tenerli distinti, rimuovi queste 2 righe)
     df_scope["QUALIFICA_OUT"] = df_scope["QUALIFICA_S"]
-    df_scope.loc[
-        (df_scope["SERVIZIO"] != "POLIAMBULATORI + TRASPORTI") &
-        (df_scope["QUALIFICA_OUT"] == "OSS/OT"),
-        "QUALIFICA_OUT"
-    ] = "OSS"
+    df_scope.loc[df_scope["QUALIFICA_OUT"] == "OSS/OT", "QUALIFICA_OUT"] = "OSS"
+
+    col_matr = resolve_col(df_scope, ["MATRICOLA"], True)
 
     agg = df_scope.groupby(["SERVIZIO", "QUALIFICA_OUT"]).agg(
-        OPERATORI=("MATRICOLA", "nunique"),
+        OPERATORI=(col_matr, "nunique") if col_matr else ("QUALIFICA_OUT", "size"),
         FTE=("FTE", "sum"),
         ST_REC=("STRAORD_REC", "sum"),
         ST_PD=("STRAORD_PD", "sum"),
@@ -161,10 +191,9 @@ def build_analisi_dotazioni(df_raw: pd.DataFrame, only_in_force=True):
         ASP=("ASP_GRAV_PUER_DIST", "sum"),
     ).reset_index()
 
-    agg["MEDIA_PROC"] = agg["FERIE_FRUITE"] / agg["OPERATORI"]
-    agg["PREST_AGGIUNTIVE"] = 0.0  # placeholder (da definire meglio)
+    agg["Media procapite"] = agg["FERIE_FRUITE"] / agg["OPERATORI"]
+    agg["Prestazioni aggiuntive (ore)"] = 0.0
 
-    # Colonne finali come template ANALISI_DOTAZIONI
     out = agg.rename(columns={
         "SERVIZIO": "UUOO/SERVIZIO",
         "QUALIFICA_OUT": "QUALIFICA",
@@ -176,112 +205,10 @@ def build_analisi_dotazioni(df_raw: pd.DataFrame, only_in_force=True):
         "FEST_REC": "Festivo recupero",
         "FERIE_MAT": "Ferie maturate 2025",
         "FERIE_FRUITE": "Ferie fruite 2025",
-        "MEDIA_PROC": "Media procapite",
         "FERIE_RES": "Residue al 01/01/2026",
         "ASSENZE": "Assenze mal/104/ecc (ore)",
         "ASP": "Asp/grav/puer/dist (ore)",
-        "PREST_AGGIUNTIVE": "Prestazioni aggiuntive (ore)"
     })
 
     return out, df_scope
 
-
-# ----------------------------
-# UI
-# ----------------------------
-st.title("🩺 Cruscotto Dotazioni Organiche – Casalmaggiore 2025")
-
-with st.sidebar:
-    st.header("📤 Caricamento dati")
-    file = st.file_uploader("Carica il file PROSPETTO PERSONALE...", type=["xlsx"])
-
-    only_in_force = st.toggle("Solo in forza a fine periodo (DATA AL max)", value=True)
-    st.caption("Se disattivi: includi anche cessati/trasferiti nel corso dell’anno.")
-
-if not file:
-    st.info("👈 Carica il file Excel per iniziare.")
-    st.stop()
-
-df_raw = load_excel(file)
-analisi, df_scope = build_analisi_dotazioni(df_raw, only_in_force=only_in_force)
-
-# ---- Filtri (dip/struttura/servizi)
-with st.sidebar:
-    st.divider()
-    st.header("🎛️ Filtri")
-
-    dip_opts = sorted(df_raw["DESC. DIP."].dropna().unique())
-    stab_opts = sorted(df_raw["STABILIMENTO"].dropna().unique())
-    cdr_opts = sorted(df_raw["CDR_DESC"].dropna().unique())
-
-    dip_sel = st.multiselect("Dipartimenti", dip_opts, default=dip_opts)
-    stab_sel = st.multiselect("Stabilimenti", stab_opts, default=stab_opts)
-    cdr_sel = st.multiselect("CDR (centri di costo)", cdr_opts, default=cdr_opts)
-
-# applica filtri alla vista generale (df_raw)
-df_f = df_raw.copy()
-df_f = df_f[df_f["DESC. DIP."].isin(dip_sel)]
-df_f = df_f[df_f["STABILIMENTO"].isin(stab_sel)]
-df_f = df_f[df_f["CDR_DESC"].isin(cdr_sel)]
-
-# ---- Layout
-tab1, tab2 = st.tabs(["📋 ANALISI_DOTAZIONI", "📊 Vista generale"])
-
-with tab1:
-    st.subheader("Tabella ricostruita tipo “ANALISI_DOTAZIONI”")
-    st.dataframe(analisi, use_container_width=True)
-
-    st.caption("ℹ️ 'Prestazioni aggiuntive' è impostata a 0 perché non ricavabile in modo univoco dal prospetto attuale.")
-
-with tab2:
-    st.subheader("KPI e distribuzioni (ospedale filtrato)")
-    # costruisci dataset per boxplot
-    df_tmp = df_f.copy()
-    df_tmp["QUALIFICA_S"] = [
-        simplify_qualifica(q1, rep)
-        for q1, rep in zip(df_tmp["QUALIFICA.1"], df_tmp["REPARTO"])
-    ]
-    df_tmp["FTE"] = to_num(df_tmp["% PART-TIME"]).replace(0, 100)/100
-
-    df_tmp["ASSENZE"] = (
-        to_num(df_tmp["MALATTIA"]) +
-        to_num(df_tmp["MALATTIA FIGLIO"]) +
-        to_num(df_tmp["LEGGE 104"]) +
-        to_num(df_tmp["PERMESSI"]) +
-        to_num(df_tmp["AGGIOR."]) +
-        to_num(df_tmp["INF./MAL.SERV"]) +
-        to_num(df_tmp["CAR.PUBBLICA"])
-    )
-
-    df_tmp["STRAORD"] = (
-        to_num(df_tmp["ORE DA RECUP. PROG."]) +
-        to_num(df_tmp["STR. PD. PROG."]) +
-        to_num(df_tmp["STR. PROG."])
-    )
-
-    # KPI
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Operatori (righe)", len(df_tmp))
-    col2.metric("Matricole uniche", df_tmp["MATRICOLA"].nunique())
-    col3.metric("FTE totali", round(df_tmp["FTE"].sum(), 2))
-    col4.metric("Assenze totali (ore)", round(df_tmp["ASSENZE"].sum(), 1))
-
-    st.divider()
-
-    # BoxPlot assenze per qualifica
-    fig1 = px.box(
-        df_tmp[df_tmp["QUALIFICA_S"].isin(["INFERMERE", "OSS", "TSRM", "TSLB", "FISOTERAP"])],
-        x="QUALIFICA_S", y="ASSENZE",
-        points="all",
-        title="Distribuzione Assenze (ore) per qualifica"
-    )
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # BoxPlot straordinari per dipartimento
-    fig2 = px.box(
-        df_tmp[df_tmp["QUALIFICA_S"].isin(["INFERMERE", "OSS"])],
-        x="DESC. DIP.", y="STRAORD",
-        points=False,
-        title="Distribuzione Straordinari (ore) per Dipartimento (solo Infermieri/OSS)"
-    )
-    st.plotly_chart(fig2, use_container_width=True)

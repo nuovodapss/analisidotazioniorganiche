@@ -7,139 +7,6 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-import pandas as pd
-import numpy as np
-import streamlit as st
-
-# =============================
-# COSTANTI
-# =============================
-ORE_GIORNO = 7.2
-ORE_TEORICHE_ANNUALI = 1720  # 1 FTE
-
-# =============================
-# ASSENZE MEDIE FTE
-# =============================
-df["Assenze medie FTE"] = (
-    df["ASSENZE_ORE_TOTALI"] /
-    df["FTE 2025"] /
-    ORE_TEORICHE_ANNUALI
-)
-
-# =============================
-# RESIDUO FERIE MEDIO (gg/op)
-# (FERIE RES. + FERIE RX.RES + FERIE AP RES.) / operatori
-# =============================
-df["FERIE_RES_TOT_ORE"] = (
-    df["FERIE RES."] +
-    df["FERIE RX.RES"] +
-    df["FERIE AP RES."]
-)
-
-df["Residuo ferie medio (gg/op)"] = (
-    (df["FERIE_RES_TOT_ORE"] / ORE_GIORNO) /
-    df["OPERATORI"]
-)
-
-# =============================
-# MEDIA STRAORDINARIO (ore/op)
-# =============================
-df["STRAORDINARIO_TOTALE"] = (
-    df["ST_RECUPERO"] +
-    df["ST_PD_PAGATO"] +
-    df["ST_PAGATO"] +
-    df["FESTIVO_PAGATO"] +
-    df["FESTIVO_RECUPERO"]
-)
-
-df["Media Straordinario (ore/op)"] = (
-    df["STRAORDINARIO_TOTALE"] / df["OPERATORI"]
-)
-
-# =============================
-# PULIZIA NUMERICA
-# =============================
-cols_num = [
-    "Assenze medie FTE",
-    "Residuo ferie medio (gg/op)",
-    "Media Straordinario (ore/op)"
-]
-
-df[cols_num] = (
-    df[cols_num]
-    .replace([np.inf, -np.inf], np.nan)
-    .round(2)
-)
-
-# =============================
-# TABELLA OUTPUT (ORDINE FISSO)
-# =============================
-tabella = df[
-    [
-        "UUOO/SERVIZIO",
-        "QUALIFICA",
-        "OPERATORI",
-        "FTE 2025",
-        "FTE 2026",
-        "Assenze medie FTE",
-        "Residuo ferie medio (gg/op)",
-        "Media Straordinario (ore/op)"
-    ]
-].copy()
-
-# =============================
-# RIGA TOTALI
-# =============================
-totali = {
-    "UUOO/SERVIZIO": "TOTALE",
-    "QUALIFICA": "",
-    "OPERATORI": tabella["OPERATORI"].sum(),
-    "FTE 2025": tabella["FTE 2025"].sum(),
-    "FTE 2026": tabella["FTE 2026"].sum(),
-    "Assenze medie FTE": (
-        df["ASSENZE_ORE_TOTALI"].sum() /
-        df["FTE 2025"].sum() /
-        ORE_TEORICHE_ANNUALI
-    ),
-    "Residuo ferie medio (gg/op)": (
-        (df["FERIE_RES_TOT_ORE"].sum() / ORE_GIORNO) /
-        tabella["OPERATORI"].sum()
-    ),
-    "Media Straordinario (ore/op)": (
-        df["STRAORDINARIO_TOTALE"].sum() /
-        tabella["OPERATORI"].sum()
-    )
-}
-
-totali_df = pd.DataFrame([totali]).round(2)
-
-tabella_finale = pd.concat(
-    [tabella, totali_df],
-    ignore_index=True
-)
-
-# =============================
-# STILE: evidenzia riga TOTALI
-# =============================
-def highlight_totali(row):
-    if row["UUOO/SERVIZIO"] == "TOTALE":
-        return ["background-color: #FFE599; font-weight: bold"] * len(row)
-    return [""] * len(row)
-
-styled_table = (
-    tabella_finale
-    .style
-    .apply(highlight_totali, axis=1)
-)
-
-# =============================
-# OUTPUT STREAMLIT
-# =============================
-st.subheader("📊 Tabella Sintesi Dotazioni")
-st.dataframe(
-    styled_table,
-    use_container_width=True
-)
 
 st.set_page_config(page_title="Cruscotto Dotazioni Organiche", layout="wide")
 
@@ -565,15 +432,19 @@ def totals_row_from_scope(df_scope: pd.DataFrame):
     return pd.DataFrame([row])
 
 
-def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_cutoff: dt.date):
-    """Tabella sintetica richiesta:
+def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_cutoff: dt.date, day_hours: float):
+    """Tabella sintetica (output principale) in questo ordine:
     UUOO/SERVIZIO, QUALIFICA, OPERATORI, N°FTE 2025, N°FTE 2026,
-    Assenze medie FTE (= Assenze totali / ore_annue_fte),
-    Media di Straordinario (= (straordinari totali) / operatori).
+    Assenze medie FTE (= Assenze totali ore / ore teoriche annue per 1 FTE),
+    Residuo ferie medio (gg/op) (= (FERIE RES.+FERIE RX RES.+FERIE AP RES.) / ore-giorno / operatori),
+    Media Straordinario (ore/op) (= (straordinari totali) / operatori).
     """
     cols_out = [
         "UUOO/SERVIZIO", "QUALIFICA", "OPERATORI",
-        "N°FTE 2025", "N°FTE 2026", "Assenze medie FTE", "Media di Straordinario"
+        "N°FTE 2025", "N°FTE 2026",
+        "Assenze medie FTE",
+        "Residuo ferie medio (gg/op)",
+        "Media Straordinario (ore/op)",
     ]
     if df_scope is None or len(df_scope) == 0:
         return pd.DataFrame(columns=cols_out)
@@ -587,7 +458,7 @@ def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_c
     if not service_col or not qual_col:
         return pd.DataFrame(columns=cols_out)
 
-    # cessazioni
+    # cessazioni -> FTE 2026 azzera cessati entro cutoff
     c_cess = find_col(df, ["DATA CESSAZIONE", "CESSAZIONE"], contains=True)
     if c_cess and c_cess in df.columns:
         cess_dt = pd.to_datetime(df[c_cess], errors="coerce").dt.date
@@ -605,11 +476,30 @@ def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_c
     for c in ["STRAORD_REC", "STRAORD_PD", "STRAORD_PAG"]:
         if c not in df.columns:
             df[c] = 0.0
-    df["STRAORD_TOT_ORE"] = to_num_series(df["STRAORD_REC"]) + to_num_series(df["STRAORD_PD"]) + to_num_series(df["STRAORD_PAG"])
+    df["STRAORD_TOT_ORE"] = (
+        to_num_series(df["STRAORD_REC"]) +
+        to_num_series(df["STRAORD_PD"]) +
+        to_num_series(df["STRAORD_PAG"])
+    )
 
     # assenze (ore)
     if "ASSENZE_TOT_ORE" not in df.columns:
         df["ASSENZE_TOT_ORE"] = 0.0
+
+    # ferie residue al 1/1/2026 (ore) - già derivata in build_detail_and_analisi
+    if "FERIE_RES_0101" not in df.columns:
+        # fallback: prova a ricostruirla dalle colonne originali se presenti
+        ferie_res = to_num_series(df[find_col(df, ["FERIE RES."], contains=True)]) if find_col(df, ["FERIE RES."], contains=True) else 0.0
+        ferie_rx_res = to_num_series(df[find_col(df, ["FERIE RX RES.", "FERIE RX.RES"], contains=True)]) if find_col(df, ["FERIE RX RES.", "FERIE RX.RES"], contains=True) else 0.0
+        ferie_ap_res = to_num_series(df[find_col(df, ["FERIE AP RES.", "FERIE AP RES"], contains=True)]) if find_col(df, ["FERIE AP RES.", "FERIE AP RES"], contains=True) else 0.0
+        # se sono scalari, rendili serie
+        if not isinstance(ferie_res, pd.Series):
+            ferie_res = pd.Series([0.0] * len(df), index=df.index)
+        if not isinstance(ferie_rx_res, pd.Series):
+            ferie_rx_res = pd.Series([0.0] * len(df), index=df.index)
+        if not isinstance(ferie_ap_res, pd.Series):
+            ferie_ap_res = pd.Series([0.0] * len(df), index=df.index)
+        df["FERIE_RES_0101"] = ferie_res + ferie_rx_res + ferie_ap_res
 
     gb = df.groupby([service_col, qual_col], dropna=False).agg(
         OPERATORI=(c_matr, "nunique") if c_matr and c_matr in df.columns else (qual_col, "size"),
@@ -618,15 +508,42 @@ def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_c
             "N°FTE 2026": ("FTE_2026", "sum"),
             "_ASSENZE_ORE": ("ASSENZE_TOT_ORE", "sum"),
             "_STRAORD_ORE": ("STRAORD_TOT_ORE", "sum"),
+            "_FERIE_RES_ORE": ("FERIE_RES_0101", "sum"),
         }
     ).reset_index()
 
     gb.rename(columns={service_col: "UUOO/SERVIZIO", qual_col: "QUALIFICA"}, inplace=True)
+
     gb["Assenze medie FTE"] = np.where(ore_annue_fte > 0, gb["_ASSENZE_ORE"] / ore_annue_fte, np.nan)
-    gb["Media di Straordinario"] = np.where(gb["OPERATORI"] > 0, gb["_STRAORD_ORE"] / gb["OPERATORI"], np.nan)
+    gb["Residuo ferie medio (gg/op)"] = np.where(
+        (day_hours > 0) & (gb["OPERATORI"] > 0),
+        (gb["_FERIE_RES_ORE"] / day_hours) / gb["OPERATORI"],
+        np.nan
+    )
+    gb["Media Straordinario (ore/op)"] = np.where(gb["OPERATORI"] > 0, gb["_STRAORD_ORE"] / gb["OPERATORI"], np.nan)
 
     gb = gb[cols_out].sort_values(["UUOO/SERVIZIO", "QUALIFICA"]).reset_index(drop=True)
+
+    # totals row (ricalcolo corretto sui totali)
+    n_op_tot = int(df[c_matr].nunique()) if c_matr and c_matr in df.columns else int(len(df))
+    ass_tot_ore = float(df["ASSENZE_TOT_ORE"].sum())
+    ferie_tot_ore = float(df["FERIE_RES_0101"].sum())
+    straord_tot_ore = float(df["STRAORD_TOT_ORE"].sum())
+
+    tot_row = {
+        "UUOO/SERVIZIO": "TOTALE",
+        "QUALIFICA": "",
+        "OPERATORI": n_op_tot,
+        "N°FTE 2025": float(df["FTE_2025"].sum()),
+        "N°FTE 2026": float(df["FTE_2026"].sum()),
+        "Assenze medie FTE": (ass_tot_ore / ore_annue_fte) if ore_annue_fte > 0 else np.nan,
+        "Residuo ferie medio (gg/op)": ((ferie_tot_ore / day_hours) / n_op_tot) if (day_hours > 0 and n_op_tot > 0) else np.nan,
+        "Media Straordinario (ore/op)": (straord_tot_ore / n_op_tot) if n_op_tot > 0 else np.nan,
+    }
+
+    gb = pd.concat([gb, pd.DataFrame([tot_row])], ignore_index=True)
     return gb
+
 
 
 def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: float, cause_cols: list[str]):
@@ -857,7 +774,7 @@ if col_ruolo and ruolo_sel:
 analisi, df_scope, CAUSE_COLS = build_detail_and_analisi(df_f, only_in_force=only_in_force)
 
 # tabella richiesta (FTE 2025 vs 2026 con cessazioni)
-tabella_dotazioni = build_tabella_dotazioni(df_scope, ore_annue_fte=ore_annue_fte, cess_cutoff=cess_cutoff)
+tabella_dotazioni = build_tabella_dotazioni(df_scope, ore_annue_fte=ore_annue_fte, cess_cutoff=cess_cutoff, day_hours=day_hours)
 
 # KPI globali
 k_global = compute_kpi(df_scope, day_hours=day_hours, ore_annue_fte=ore_annue_fte, cause_cols=CAUSE_COLS)
@@ -891,7 +808,21 @@ with tab1:
     st.subheader("Tabella Dotazioni (sintesi richiesta)")
     st.caption("FTE 2026: azzera automaticamente i cessati entro la data selezionata in sidebar.")
 
-    st.dataframe(tabella_dotazioni, use_container_width=True, height=520)
+    def _highlight_totali(row):
+        if str(row.get("UUOO/SERVIZIO", "")) == "TOTALE":
+            return ["background-color: #FFE599; font-weight: bold"] * len(row)
+        return [""] * len(row)
+
+    _fmt = {
+        "N°FTE 2025": "{:.2f}",
+        "N°FTE 2026": "{:.2f}",
+        "Assenze medie FTE": "{:.2f}",
+        "Residuo ferie medio (gg/op)": "{:.2f}",
+        "Media Straordinario (ore/op)": "{:.2f}",
+    }
+    tabella_styled = tabella_dotazioni.style.apply(_highlight_totali, axis=1).format(_fmt, na_rep="")
+
+    st.dataframe(tabella_styled, use_container_width=True, height=520)
 
     st.download_button(
         "Scarica tabella sintetica (CSV)",
@@ -1157,3 +1088,4 @@ with tab3:
         st.plotly_chart(fig_caus_rep, use_container_width=True)
     else:
         st.info("Breakdown causali non disponibile per questo reparto.")
+

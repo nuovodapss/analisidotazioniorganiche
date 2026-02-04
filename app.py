@@ -415,8 +415,20 @@ def compute_kpi(df_scope: pd.DataFrame, day_hours: float, ore_annue_fte: float, 
     res_giorni = (ferie_res_ore / day_hours) if (ferie_in_ore and day_hours and day_hours > 0) else ferie_res_ore
     res_giorni_media = (res_giorni / n_operatori) if n_operatori > 0 and not np.isnan(res_giorni) else np.nan
 
-    st_tot = float(df_scope["STRAORD_REC"].sum() + df_scope["STRAORD_PD"].sum() + df_scope["STRAORD_PAG"].sum()) if \
-        all(c in df_scope.columns for c in ["STRAORD_REC", "STRAORD_PD", "STRAORD_PAG"]) else 0.0
+    st_puro = (
+        float(df_scope["STRAORD_REC"].sum() + df_scope["STRAORD_PD"].sum() + df_scope["STRAORD_PAG"].sum())
+        if all(c in df_scope.columns for c in ["STRAORD_REC", "STRAORD_PD", "STRAORD_PAG"])
+        else 0.0
+    )
+
+    # Per allinearsi al report (PRESTAZIONI AGGIUNTIVE), includiamo anche i festivi:
+    fest_tot = (
+        float(df_scope["FEST_PAG"].sum() + df_scope["FEST_REC"].sum())
+        if all(c in df_scope.columns for c in ["FEST_PAG", "FEST_REC"])
+        else 0.0
+    )
+
+    st_tot = st_puro + fest_tot
     st_x_fte = (st_tot / fte_tot) if fte_tot > 0 else np.nan
 
     prest_tot = float(df_scope["PREST_AGG_ORE"].sum()) if "PREST_AGG_ORE" in df_scope.columns else 0.0

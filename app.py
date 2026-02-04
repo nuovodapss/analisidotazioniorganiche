@@ -7,6 +7,139 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+# =============================
+# COSTANTI
+# =============================
+ORE_GIORNO = 7.2
+ORE_TEORICHE_ANNUALI = 1720  # 1 FTE
+
+# =============================
+# ASSENZE MEDIE FTE
+# =============================
+df["Assenze medie FTE"] = (
+    df["ASSENZE_ORE_TOTALI"] /
+    df["FTE 2025"] /
+    ORE_TEORICHE_ANNUALI
+)
+
+# =============================
+# RESIDUO FERIE MEDIO (gg/op)
+# (FERIE RES. + FERIE RX.RES + FERIE AP RES.) / operatori
+# =============================
+df["FERIE_RES_TOT_ORE"] = (
+    df["FERIE RES."] +
+    df["FERIE RX.RES"] +
+    df["FERIE AP RES."]
+)
+
+df["Residuo ferie medio (gg/op)"] = (
+    (df["FERIE_RES_TOT_ORE"] / ORE_GIORNO) /
+    df["OPERATORI"]
+)
+
+# =============================
+# MEDIA STRAORDINARIO (ore/op)
+# =============================
+df["STRAORDINARIO_TOTALE"] = (
+    df["ST_RECUPERO"] +
+    df["ST_PD_PAGATO"] +
+    df["ST_PAGATO"] +
+    df["FESTIVO_PAGATO"] +
+    df["FESTIVO_RECUPERO"]
+)
+
+df["Media Straordinario (ore/op)"] = (
+    df["STRAORDINARIO_TOTALE"] / df["OPERATORI"]
+)
+
+# =============================
+# PULIZIA NUMERICA
+# =============================
+cols_num = [
+    "Assenze medie FTE",
+    "Residuo ferie medio (gg/op)",
+    "Media Straordinario (ore/op)"
+]
+
+df[cols_num] = (
+    df[cols_num]
+    .replace([np.inf, -np.inf], np.nan)
+    .round(2)
+)
+
+# =============================
+# TABELLA OUTPUT (ORDINE FISSO)
+# =============================
+tabella = df[
+    [
+        "UUOO/SERVIZIO",
+        "QUALIFICA",
+        "OPERATORI",
+        "FTE 2025",
+        "FTE 2026",
+        "Assenze medie FTE",
+        "Residuo ferie medio (gg/op)",
+        "Media Straordinario (ore/op)"
+    ]
+].copy()
+
+# =============================
+# RIGA TOTALI
+# =============================
+totali = {
+    "UUOO/SERVIZIO": "TOTALE",
+    "QUALIFICA": "",
+    "OPERATORI": tabella["OPERATORI"].sum(),
+    "FTE 2025": tabella["FTE 2025"].sum(),
+    "FTE 2026": tabella["FTE 2026"].sum(),
+    "Assenze medie FTE": (
+        df["ASSENZE_ORE_TOTALI"].sum() /
+        df["FTE 2025"].sum() /
+        ORE_TEORICHE_ANNUALI
+    ),
+    "Residuo ferie medio (gg/op)": (
+        (df["FERIE_RES_TOT_ORE"].sum() / ORE_GIORNO) /
+        tabella["OPERATORI"].sum()
+    ),
+    "Media Straordinario (ore/op)": (
+        df["STRAORDINARIO_TOTALE"].sum() /
+        tabella["OPERATORI"].sum()
+    )
+}
+
+totali_df = pd.DataFrame([totali]).round(2)
+
+tabella_finale = pd.concat(
+    [tabella, totali_df],
+    ignore_index=True
+)
+
+# =============================
+# STILE: evidenzia riga TOTALI
+# =============================
+def highlight_totali(row):
+    if row["UUOO/SERVIZIO"] == "TOTALE":
+        return ["background-color: #FFE599; font-weight: bold"] * len(row)
+    return [""] * len(row)
+
+styled_table = (
+    tabella_finale
+    .style
+    .apply(highlight_totali, axis=1)
+)
+
+# =============================
+# OUTPUT STREAMLIT
+# =============================
+st.subheader("📊 Tabella Sintesi Dotazioni")
+st.dataframe(
+    styled_table,
+    use_container_width=True
+)
 
 st.set_page_config(page_title="Cruscotto Dotazioni Organiche", layout="wide")
 

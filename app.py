@@ -1,6 +1,7 @@
 # app.py
 import io
 import re
+import datetime as dt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -431,6 +432,70 @@ def totals_row_from_scope(df_scope: pd.DataFrame):
     return pd.DataFrame([row])
 
 
+def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_cutoff: dt.date):
+    """Tabella sintetica richiesta:
+    UUOO/SERVIZIO, QUALIFICA, OPERATORI, N°FTE 2025, N°FTE 2026,
+    Assenze medie FTE (= Assenze totali / ore_annue_fte),
+    Media di Straordinario (= (straordinari totali) / operatori).
+    """
+    cols_out = [
+        "UUOO/SERVIZIO", "QUALIFICA", "OPERATORI",
+        "N°FTE 2025", "N°FTE 2026", "Assenze medie FTE", "Media di Straordinario"
+    ]
+    if df_scope is None or len(df_scope) == 0:
+        return pd.DataFrame(columns=cols_out)
+
+    df = df_scope.copy()
+
+    c_matr = find_col(df, ["MATRICOLA"], contains=True)
+    service_col = "SERVIZIO" if "SERVIZIO" in df.columns else find_col(df, ["CDR_DESC", "REPARTO"], contains=True)
+    qual_col = "QUALIFICA_OUT" if "QUALIFICA_OUT" in df.columns else find_col(df, ["QUALIFICA.1", "QUALIFICA"], contains=True)
+
+    if not service_col or not qual_col:
+        return pd.DataFrame(columns=cols_out)
+
+    # cessazioni
+    c_cess = find_col(df, ["DATA CESSAZIONE", "CESSAZIONE"], contains=True)
+    if c_cess and c_cess in df.columns:
+        cess_dt = pd.to_datetime(df[c_cess], errors="coerce").dt.date
+    else:
+        cess_dt = pd.Series([pd.NaT] * len(df), index=df.index)
+
+    df["CESSATO_AL_CUTOFF"] = False
+    if cess_cutoff:
+        df["CESSATO_AL_CUTOFF"] = cess_dt.notna() & (cess_dt <= cess_cutoff)
+
+    df["FTE_2025"] = to_num_series(df["FTE"]) if "FTE" in df.columns else 0.0
+    df["FTE_2026"] = df["FTE_2025"].where(~df["CESSATO_AL_CUTOFF"], 0.0)
+
+    # straordinari totali (ore)
+    for c in ["STRAORD_REC", "STRAORD_PD", "STRAORD_PAG"]:
+        if c not in df.columns:
+            df[c] = 0.0
+    df["STRAORD_TOT_ORE"] = to_num_series(df["STRAORD_REC"]) + to_num_series(df["STRAORD_PD"]) + to_num_series(df["STRAORD_PAG"])
+
+    # assenze (ore)
+    if "ASSENZE_TOT_ORE" not in df.columns:
+        df["ASSENZE_TOT_ORE"] = 0.0
+
+    gb = df.groupby([service_col, qual_col], dropna=False).agg(
+        OPERATORI=(c_matr, "nunique") if c_matr and c_matr in df.columns else (qual_col, "size"),
+        **{
+            "N°FTE 2025": ("FTE_2025", "sum"),
+            "N°FTE 2026": ("FTE_2026", "sum"),
+            "_ASSENZE_ORE": ("ASSENZE_TOT_ORE", "sum"),
+            "_STRAORD_ORE": ("STRAORD_TOT_ORE", "sum"),
+        }
+    ).reset_index()
+
+    gb.rename(columns={service_col: "UUOO/SERVIZIO", qual_col: "QUALIFICA"}, inplace=True)
+    gb["Assenze medie FTE"] = np.where(ore_annue_fte > 0, gb["_ASSENZE_ORE"] / ore_annue_fte, np.nan)
+    gb["Media di Straordinario"] = np.where(gb["OPERATORI"] > 0, gb["_STRAORD_ORE"] / gb["OPERATORI"], np.nan)
+
+    gb = gb[cols_out].sort_values(["UUOO/SERVIZIO", "QUALIFICA"]).reset_index(drop=True)
+    return gb
+
+
 def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, day_hours: float, cause_cols: list[str]):
     c_matr = find_col(df_sub, ["MATRICOLA"], contains=True)
     c_cogn = find_col(df_sub, ["COGNOME"], contains=True)
@@ -548,12 +613,14 @@ st.title("Cruscotto Dotazioni Organiche")
 
 with st.sidebar:
     st.header("📤 Caricamento")
-    uploaded = st.file_uploader("Carica PROSPETTO PERSONALE COMPARTO (xlsx)", type=["xlsx"])
+    uploaded = st.file_uploader("Carica dotazioni.xlsx (xlsx)", type=["xlsx"])
 
     st.divider()
     st.header("⚙️ Parametri calcolo")
     ore_annue_fte = st.number_input("Ore teoriche annue per 1 FTE", min_value=800.0, max_value=2200.0, value=1470.0, step=10.0)
     day_hours = st.number_input("Ore per giorno ferie", min_value=4.0, max_value=12.0, value=7.2, step=0.1)
+
+    cess_cutoff = st.date_input("Data riferimento cessazioni (FTE 2026)", value=dt.date.today())
 
     st.divider()
     st.header("⚙️ Opzioni")
@@ -587,6 +654,19 @@ with st.expander("🔎 Debug lettura Excel"):
     st.write(meta)
     st.write("Colonne lette:")
     st.write(list(df_raw.columns))
+
+    # check colonne essenziali (best effort)
+    essential = [
+        "CDR_DESC", "REPARTO", "MATRICOLA", "% PART-TIME", "DATA AL",
+        "DATA CESSAZIONE", "ORE DA RECUP. PROG.", "STR. PD. PROG.", "STR. PROG.",
+        "MALATTIA", "PERMESSI", "LEGGE 104", "MALATTIA FIGLIO", "GRAVIDANZA",
+    ]
+    missing = [c for c in essential if find_col(df_raw, [c], contains=False) is None]
+    st.write(f"Numero colonne: {len(df_raw.columns)}")
+    if missing:
+        st.warning(f"Colonne essenziali non trovate (controlla header): {missing}")
+    else:
+        st.success("Tutte le colonne essenziali sono presenti.")
     st.dataframe(df_raw.head(15), use_container_width=True)
 
 # ---- Filtri in sidebar ----
@@ -643,6 +723,9 @@ if col_ruolo and ruolo_sel:
 # costruzione analisi + scope
 analisi, df_scope, CAUSE_COLS = build_detail_and_analisi(df_f, only_in_force=only_in_force)
 
+# tabella richiesta (FTE 2025 vs 2026 con cessazioni)
+tabella_dotazioni = build_tabella_dotazioni(df_scope, ore_annue_fte=ore_annue_fte, cess_cutoff=cess_cutoff)
+
 # KPI globali
 k_global = compute_kpi(df_scope, day_hours=day_hours, ore_annue_fte=ore_annue_fte, cause_cols=CAUSE_COLS)
 
@@ -672,28 +755,52 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1
 # =========================
 with tab1:
-    st.subheader("Tabella ANALISI_DOTAZIONI (derivata dal prospetto)")
-    df_total = totals_row_from_scope(df_scope)
-    analisi_show = pd.concat([analisi, df_total], ignore_index=True)
+    st.subheader("Tabella Dotazioni (sintesi richiesta)")
+    st.caption("FTE 2026: azzera automaticamente i cessati entro la data selezionata in sidebar.")
 
-    st.dataframe(analisi_show, use_container_width=True, height=520)
+    st.dataframe(tabella_dotazioni, use_container_width=True, height=520)
 
     st.download_button(
-        "Scarica CSV",
-        data=analisi_show.to_csv(index=False).encode("utf-8"),
-        file_name="ANALISI_DOTAZIONI_ricostruita_con_totali.csv",
+        "Scarica tabella sintetica (CSV)",
+        data=tabella_dotazioni.to_csv(index=False).encode("utf-8"),
+        file_name="DOTAZIONI_sintesi.csv",
         mime="text/csv",
     )
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        analisi_show.to_excel(writer, index=False, sheet_name="ANALISI_DOTAZIONI")
+    buf_syn = io.BytesIO()
+    with pd.ExcelWriter(buf_syn, engine="openpyxl") as writer:
+        tabella_dotazioni.to_excel(writer, index=False, sheet_name="DOTAZIONI_SINTESI")
     st.download_button(
-        "Scarica Excel",
-        data=buf.getvalue(),
-        file_name="ANALISI_DOTAZIONI_ricostruita_con_totali.xlsx",
+        "Scarica tabella sintetica (Excel)",
+        data=buf_syn.getvalue(),
+        file_name="DOTAZIONI_sintesi.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+    st.divider()
+
+    with st.expander("Tabella ANALISI_DOTAZIONI (dettaglio: ferie/assenze/straordinari/festivi)"):
+        df_total = totals_row_from_scope(df_scope)
+        analisi_show = pd.concat([analisi, df_total], ignore_index=True)
+
+        st.dataframe(analisi_show, use_container_width=True, height=520)
+
+        st.download_button(
+            "Scarica CSV",
+            data=analisi_show.to_csv(index=False).encode("utf-8"),
+            file_name="ANALISI_DOTAZIONI_ricostruita_con_totali.csv",
+            mime="text/csv",
+        )
+
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            analisi_show.to_excel(writer, index=False, sheet_name="ANALISI_DOTAZIONI")
+        st.download_button(
+            "Scarica Excel",
+            data=buf.getvalue(),
+            file_name="ANALISI_DOTAZIONI_ricostruita_con_totali.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 # =========================
 # TAB 2
@@ -808,14 +915,22 @@ with tab3:
     col_rep_scope = find_col(df_scope, ["REPARTO"], contains=True)
     dim_label = "REPARTO" if col_rep_scope else "SERVIZIO"
     dim_col = col_rep_scope if col_rep_scope else "SERVIZIO"
-
     dim_values = sorted(df_scope[dim_col].dropna().astype(str).unique())
-    chosen_dim = st.selectbox(f"Seleziona {dim_label}", dim_values, index=0)
+    chosen_dims = st.multiselect(
+        f"Seleziona uno o più {dim_label}",
+        dim_values,
+        default=[dim_values[0]] if dim_values else []
+    )
 
-    df_rep = df_scope[df_scope[dim_col].astype(str) == str(chosen_dim)].copy()
+    if not chosen_dims:
+        st.info(f"Seleziona almeno un {dim_label} per vedere il dettaglio.")
+        st.stop()
+
+    chosen_label_short = ", ".join(chosen_dims[:3]) + (" …" if len(chosen_dims) > 3 else "")
+    df_rep = df_scope[df_scope[dim_col].astype(str).isin([str(x) for x in chosen_dims])].copy()
     k_rep = compute_kpi(df_rep, day_hours=day_hours, ore_annue_fte=ore_annue_fte, cause_cols=CAUSE_COLS)
 
-    st.markdown(f"### KPI – {dim_label}: **{chosen_dim}**")
+    st.markdown(f"### KPI – {dim_label}: **{chosen_label_short}**")
     with st.container(border=True):
         a = st.columns(4)
         a[0].metric("Operatori", f"{k_rep['n_operatori']}")
@@ -855,7 +970,7 @@ with tab3:
     st.download_button(
         "Scarica persone (CSV)",
         data=df_people.to_csv(index=False).encode("utf-8"),
-        file_name=f"persone_{dim_label.lower()}_{str(chosen_dim)[:40]}.csv".replace(" ", "_"),
+        file_name=f"persone_{dim_label.lower()}_{len(chosen_dims)}_selezionati.csv",
         mime="text/csv",
     )
     bufp = io.BytesIO()
@@ -864,7 +979,7 @@ with tab3:
     st.download_button(
         "Scarica persone (Excel)",
         data=bufp.getvalue(),
-        file_name=f"persone_{dim_label.lower()}_{str(chosen_dim)[:40]}.xlsx".replace(" ", "_"),
+        file_name=f"persone_{dim_label.lower()}_{len(chosen_dims)}_selezionati.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -909,4 +1024,3 @@ with tab3:
         st.plotly_chart(fig_caus_rep, use_container_width=True)
     else:
         st.info("Breakdown causali non disponibile per questo reparto.")
-

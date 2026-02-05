@@ -78,6 +78,28 @@ def to_num_series(s: pd.Series) -> pd.Series:
     return pd.to_numeric(x, errors="coerce").fillna(0)
 
 
+
+
+def infer_ferie_in_ore(df: pd.DataFrame) -> bool | None:
+    """Heuristica: se le ferie residue sono in ore (valori tipicamente >80), restituisce True.
+    Se sembrano in giorni (tipicamente <=60), restituisce False. Altrimenti None."""
+    c = find_col(df, ["FERIE RES." , "FERIE RES"], contains=True)
+    if not c:
+        return None
+    try:
+        s = to_num_series(df[c])
+        if s is None or len(s) == 0:
+            return None
+        q95 = float(s.quantile(0.95))
+        # giorni tipici: 0-40; ore tipiche: 0-300
+        if q95 > 80:
+            return True
+        if q95 <= 60:
+            return False
+    except Exception:
+        return None
+    return None
+
 def z(df: pd.DataFrame) -> pd.Series:
     return pd.Series(0.0, index=df.index)
 
@@ -238,9 +260,13 @@ def build_detail_and_analisi(df_raw: pd.DataFrame, only_in_force: bool, cess_cut
     fest_rec = col_or_zero(["FEST. INFRASETT. A RECUPERO"])
 
     # prestazioni aggiuntive (ore) — best effort
+    # Nel report PDF le prestazioni aggiuntive coincidono (di fatto) con straordinari + festivi.
+    # Se la colonna non esiste nel file, le ricostruiamo come somma delle 5 componenti.
     c_prest = find_col(df, ["PRESTAZIONI AGGIUNTIVE", "PREST. AGGIUNTIVE", "PRESTAZ"], contains=True)
-    prest_agg = to_num_series(df[c_prest]) if c_prest else z(df)
-
+    if c_prest:
+        prest_agg = to_num_series(df[c_prest])
+    else:
+        prest_agg = st_rec + st_pd + st_pag + fest_pag + fest_rec
     # FTE
     if c_pt:
         pt = to_num_series(df[c_pt])
@@ -415,20 +441,8 @@ def compute_kpi(df_scope: pd.DataFrame, day_hours: float, ore_annue_fte: float, 
     res_giorni = (ferie_res_ore / day_hours) if (ferie_in_ore and day_hours and day_hours > 0) else ferie_res_ore
     res_giorni_media = (res_giorni / n_operatori) if n_operatori > 0 and not np.isnan(res_giorni) else np.nan
 
-    st_puro = (
-        float(df_scope["STRAORD_REC"].sum() + df_scope["STRAORD_PD"].sum() + df_scope["STRAORD_PAG"].sum())
-        if all(c in df_scope.columns for c in ["STRAORD_REC", "STRAORD_PD", "STRAORD_PAG"])
-        else 0.0
-    )
-
-    # Per allinearsi al report (PRESTAZIONI AGGIUNTIVE), includiamo anche i festivi:
-    fest_tot = (
-        float(df_scope["FEST_PAG"].sum() + df_scope["FEST_REC"].sum())
-        if all(c in df_scope.columns for c in ["FEST_PAG", "FEST_REC"])
-        else 0.0
-    )
-
-    st_tot = st_puro + fest_tot
+    st_tot = float(df_scope["STRAORD_REC"].sum() + df_scope["STRAORD_PD"].sum() + df_scope["STRAORD_PAG"].sum()) if \
+        all(c in df_scope.columns for c in ["STRAORD_REC", "STRAORD_PD", "STRAORD_PAG"]) else 0.0
     st_x_fte = (st_tot / fte_tot) if fte_tot > 0 else np.nan
 
     prest_tot = float(df_scope["PREST_AGG_ORE"].sum()) if "PREST_AGG_ORE" in df_scope.columns else 0.0
@@ -720,6 +734,7 @@ with st.sidebar:
     st.divider()
     st.header("⚙️ Opzioni")
     only_in_force = st.toggle("Solo in forza a fine periodo (DATA AL max)", value=False)
+    use_stab_cdc = st.toggle("Usa mappa Stabilimento (CDC→Stabilimento)", value=True)
 
 if not uploaded:
     st.info("Carica un file Excel dalla sidebar per iniziare.")
@@ -764,6 +779,15 @@ with st.expander("🔎 Debug lettura Excel"):
         st.success("Tutte le colonne essenziali sono presenti.")
     st.dataframe(df_raw.head(15), use_container_width=True)
 
+
+# ---- Auto-detect unità ferie (per evitare valori tipo 2.69 quando le ferie sono già in giorni) ----
+ferie_guess = infer_ferie_in_ore(df_raw)
+if ferie_guess is False and ferie_in_ore:
+    st.sidebar.warning("🔎 Rilevate ferie già espresse in GIORNI: disattivo la conversione ore→giorni.")
+    ferie_in_ore = False
+elif ferie_guess is True and (not ferie_in_ore):
+    st.sidebar.info("🔎 Rilevate ferie espresse in ORE: puoi attivare 'Ferie espresse in ORE' per convertirle in giorni.")
+
 # ---- Filtri in sidebar ----
 col_dip = find_col(df_raw, ["DESC. DIP.", "DESC DIP"], contains=True)
 col_stab = find_col(df_raw, ["STABILIMENTO"], contains=True)
@@ -773,22 +797,208 @@ col_prof = find_col(df_raw, ["PROFILO"], contains=True)
 col_qual = find_col(df_raw, ["QUALIFICA.1", "QUALIFICA"], contains=True)
 col_ruolo = find_col(df_raw, ["DESC. RUOLO", "RUOLO"], contains=True)
 
+# ---- DAPSS: mappa CDC (COD.REP.) -> Area Funzionale ----
+col_cdc = find_col(df_raw, ["COD.REP.", "COD.REP", "COD REP", "CDC", "CODICE REPARTO"], contains=True)
+
+def _cdc_to_int(x):
+    if pd.isna(x):
+        return np.nan
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, float) and not np.isnan(x):
+        return int(x)
+    s = str(x).strip()
+    m = re.match(r"^0*(\d+)", s)
+    return int(m.group(1)) if m else np.nan
+
+DAPSS_DEFAULT = {
+    # AREA MEDICO - ONCOLOGICA
+    105: "AREA MEDICO - ONCOLOGICA", 134: "AREA MEDICO - ONCOLOGICA", 135: "AREA MEDICO - ONCOLOGICA",
+    152: "AREA MEDICO - ONCOLOGICA", 161: "AREA MEDICO - ONCOLOGICA", 162: "AREA MEDICO - ONCOLOGICA",
+    173: "AREA MEDICO - ONCOLOGICA", 175: "AREA MEDICO - ONCOLOGICA", 176: "AREA MEDICO - ONCOLOGICA",
+    189: "AREA MEDICO - ONCOLOGICA", 191: "AREA MEDICO - ONCOLOGICA", 193: "AREA MEDICO - ONCOLOGICA",
+    197: "AREA MEDICO - ONCOLOGICA", 201: "AREA MEDICO - ONCOLOGICA", 202: "AREA MEDICO - ONCOLOGICA",
+    231: "AREA MEDICO - ONCOLOGICA", 232: "AREA MEDICO - ONCOLOGICA", 233: "AREA MEDICO - ONCOLOGICA",
+    234: "AREA MEDICO - ONCOLOGICA", 236: "AREA MEDICO - ONCOLOGICA", 326: "AREA MEDICO - ONCOLOGICA",
+    324: "AREA MEDICO - ONCOLOGICA", 2700: "AREA MEDICO - ONCOLOGICA",
+
+    # AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO
+    120: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 121: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    122: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 181: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    182: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 221: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    260: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 261: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    292: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 300: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    312: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 361: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    362: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 412: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+    430: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 437: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",
+
+    # SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI
+    204: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 422: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    426: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 442: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    450: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 451: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    460: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 461: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    462: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 465: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    470: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 473: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    480: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 482: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    483: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 484: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    488: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 490: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    493: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 500: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    510: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 560: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+    570: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI", 585: "SERVIZI DIAGNOSTICI - AMBULATORIALI - RIABILITATIVI",
+
+    # AREA CHIRURGICA
+    116: "AREA CHIRURGICA", 282: "AREA CHIRURGICA", 315: "AREA CHIRURGICA", 320: "AREA CHIRURGICA",
+    321: "AREA CHIRURGICA", 329: "AREA CHIRURGICA", 331: "AREA CHIRURGICA", 340: "AREA CHIRURGICA",
+    341: "AREA CHIRURGICA", 351: "AREA CHIRURGICA", 354: "AREA CHIRURGICA", 392: "AREA CHIRURGICA",
+    393: "AREA CHIRURGICA", 505: "AREA CHIRURGICA", 582: "AREA CHIRURGICA", 586: "AREA CHIRURGICA",
+    633: "AREA CHIRURGICA",
+
+    # AREA MATERNO-INFANTILE
+    211: "AREA MATERNO-INFANTILE", 212: "AREA MATERNO-INFANTILE", 214: "AREA MATERNO-INFANTILE",
+    215: "AREA MATERNO-INFANTILE", 219: "AREA MATERNO-INFANTILE", 401: "AREA MATERNO-INFANTILE",
+    402: "AREA MATERNO-INFANTILE", 403: "AREA MATERNO-INFANTILE",
+
+    # AREA DELL'EMERGENZA - URGENZA
+    251: "AREA DELL'EMERGENZA - URGENZA", 255: "AREA DELL'EMERGENZA - URGENZA", 271: "AREA DELL'EMERGENZA - URGENZA",
+
+    # AAT 118
+    263: "AAT 118", 274: "AAT 118",
+
+    # AREA DELLA SALUTE MENTALE E DIPENDENZE
+    521: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 522: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    523: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 525: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    526: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 527: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    528: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 529: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    531: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 532: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    534: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 538: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    543: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 544: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    545: "AREA DELLA SALUTE MENTALE E DIPENDENZE", 1004: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+    1005: "AREA DELLA SALUTE MENTALE E DIPENDENZE",
+
+    # SERVIZI DISTRETTUALI E COT
+    140: "SERVIZI DISTRETTUALI E COT", 626: "SERVIZI DISTRETTUALI E COT", 894: "SERVIZI DISTRETTUALI E COT",
+    1008: "SERVIZI DISTRETTUALI E COT", 1009: "SERVIZI DISTRETTUALI E COT", 1011: "SERVIZI DISTRETTUALI E COT",
+    1013: "SERVIZI DISTRETTUALI E COT", 1021: "SERVIZI DISTRETTUALI E COT", 1022: "SERVIZI DISTRETTUALI E COT",
+    1034: "SERVIZI DISTRETTUALI E COT", 1035: "SERVIZI DISTRETTUALI E COT", 1200: "SERVIZI DISTRETTUALI E COT",
+    1203: "SERVIZI DISTRETTUALI E COT", 1204: "SERVIZI DISTRETTUALI E COT",
+    2804: "SERVIZI DISTRETTUALI E COT", 2805: "SERVIZI DISTRETTUALI E COT", 2810: "SERVIZI DISTRETTUALI E COT",
+    2814: "SERVIZI DISTRETTUALI E COT",
+}
+
+def parse_dapss_override(text: str) -> dict[int, str]:
+    mapping = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # accetta: AREA<TAB>cdc1,c2,c3 oppure AREA;cdc1,c2
+        parts = re.split(r"\t|;", line, maxsplit=1)
+        if len(parts) < 2:
+            continue
+        area = parts[0].strip()
+        codes_part = parts[1].strip()
+        codes = re.split(r"[ ,]+", codes_part)
+        for c in codes:
+            c = c.strip()
+            if not c:
+                continue
+            m = re.match(r"^0*(\d+)", c)
+            if m:
+                mapping[int(m.group(1))] = area
+    return mapping
+
+# costruisce colonna DAPSS_AREA (se possibile)
+if col_cdc:
+    df_raw["_CDC_CODE"] = df_raw[col_cdc].apply(_cdc_to_int)
+    df_raw["DAPSS_AREA"] = df_raw["_CDC_CODE"].map(DAPSS_DEFAULT).fillna("NON MAPPATO")
+
+    # ---- Stabilimento: override tramite mappa CDC (opzionale) ----
+    CDC_STAB_MAP = {
+        # CREMONA
+        140: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        503: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        528: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        529: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        531: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        532: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        534: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        538: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        543: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        545: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        596: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        626: "AREA SOCIOSANITARIA TERRITORIALE CREMONA",
+        # CASALMAGGIORE
+        521: "AREA SOCIOSANITARIA CASALMAGGIORE",
+        522: "AREA SOCIOSANITARIA CASALMAGGIORE",
+        523: "AREA SOCIOSANITARIA CASALMAGGIORE",
+        525: "AREA SOCIOSANITARIA CASALMAGGIORE",
+        544: "AREA SOCIOSANITARIA CASALMAGGIORE",
+    }
+
+    col_stab_base = col_stab
+    if col_stab_base:
+        df_raw["STABILIMENTO_DA_CDC"] = df_raw[col_stab_base].astype(str)
+        df_raw.loc[df_raw["_CDC_CODE"].isin(CDC_STAB_MAP.keys()), "STABILIMENTO_DA_CDC"] = df_raw["_CDC_CODE"].map(CDC_STAB_MAP)
+
+
+
+# colonna Stabilimento effettiva (eventuale override CDC→Stabilimento)
+col_stab_used = "STABILIMENTO_DA_CDC" if (use_stab_cdc and "STABILIMENTO_DA_CDC" in df_raw.columns) else col_stab
+
+
 with st.sidebar:
     st.divider()
     st.header("Filtri")
 
     def opts(col):
-        return sorted(df_raw[col].dropna().astype(str).unique()) if col else []
+        if not col:
+            return []
+        # col può essere nome colonna (str) oppure variabile già risolta
+        c = col if isinstance(col, str) else col
+        if isinstance(c, str) and c in df_raw.columns:
+            return sorted(df_raw[c].dropna().astype(str).unique())
+        return []
 
     dip_opts = opts(col_dip)
-    stab_opts = opts(col_stab)
+    stab_opts = opts(col_stab_used)
     cdr_opts = opts(col_cdr)
     rep_opts = opts(col_rep)
     prof_opts = opts(col_prof)
     qual_opts = opts(col_qual)
     ruolo_opts = opts(col_ruolo)
+    dapss_opts = opts("DAPSS_AREA") if "DAPSS_AREA" in df_raw.columns else []
 
-    dip_sel = st.multiselect("Dipartimento", dip_opts, default=dip_opts) if dip_opts else []
+    filtro_org = st.radio(
+        "Filtro organizzativo principale",
+        ["Dipartimento (DESC. DIP)", "Area funzionale DAPSS (CDC)"],
+        index=0,
+    )
+
+    # Dipartimento vs DAPSS
+    if filtro_org.startswith("Dipartimento"):
+        dip_sel = st.multiselect("Dipartimento", dip_opts, default=dip_opts) if dip_opts else []
+        dapss_sel = []
+    else:
+        dip_sel = dip_opts  # non filtrare per dipartimento
+        # override facoltativo della mappa CDC->DAPSS
+        with st.expander("🗺️ Mappa CDC → Area DAPSS (override facoltativo)"):
+            st.caption("Formato: AREA<TAB>cdc1,c2,c3 (una riga per area). Esempio: AREA CHIRURGICA\t116,320,321")
+            override_txt = st.text_area("Override mappa", value="", height=110)
+            override_map = parse_dapss_override(override_txt)
+            if override_map and "_CDC_CODE" in df_raw.columns:
+                _map = {**DAPSS_DEFAULT, **override_map}
+                df_raw["DAPSS_AREA"] = df_raw["_CDC_CODE"].map(_map).fillna("NON MAPPATO")
+                dapss_opts = sorted(df_raw["DAPSS_AREA"].dropna().astype(str).unique())
+
+        default_dapss = [x for x in dapss_opts if x != "NON MAPPATO"]
+        dapss_sel = st.multiselect("Area DAPSS", dapss_opts, default=default_dapss) if dapss_opts else []
+
+        if "_CDC_CODE" in df_raw.columns and "DAPSS_AREA" in df_raw.columns:
+            unmapped = sorted(df_raw.loc[df_raw["DAPSS_AREA"] == "NON MAPPATO", "_CDC_CODE"].dropna().astype(int).unique().tolist())
+            if len(unmapped) > 0:
+                st.info(f"CDC non mappati: {len(unmapped)} (es. {', '.join(map(str, unmapped[:10]))}{'...' if len(unmapped) > 10 else ''})")
+
+    # altri filtri
     stab_sel = st.multiselect("Stabilimento", stab_opts, default=stab_opts) if stab_opts else []
     cdr_sel = st.multiselect("CDR_DESC", cdr_opts, default=cdr_opts) if cdr_opts else []
     rep_sel = st.multiselect("Reparto", rep_opts, default=rep_opts) if rep_opts else []
@@ -797,13 +1007,17 @@ with st.sidebar:
     prof_sel = st.multiselect("Profilo", prof_opts, default=prof_opts) if prof_opts else []
     qual_sel = st.multiselect("Qualifica", qual_opts, default=qual_opts) if qual_opts else []
     ruolo_sel = st.multiselect("Ruolo", ruolo_opts, default=ruolo_opts) if ruolo_opts else []
-
 # applica filtri
 df_f = df_raw.copy()
-if col_dip and dip_sel:
-    df_f = df_f[df_f[col_dip].astype(str).isin(dip_sel)]
-if col_stab and stab_sel:
-    df_f = df_f[df_f[col_stab].astype(str).isin(stab_sel)]
+# filtro organizzativo principale
+if filtro_org.startswith("Dipartimento"):
+    if col_dip and dip_sel:
+        df_f = df_f[df_f[col_dip].astype(str).isin(dip_sel)]
+else:
+    if "DAPSS_AREA" in df_f.columns and dapss_sel:
+        df_f = df_f[df_f["DAPSS_AREA"].astype(str).isin(dapss_sel)]
+if col_stab_used and stab_sel:
+    df_f = df_f[df_f[col_stab_used].astype(str).isin(stab_sel)]
 if col_cdr and cdr_sel:
     df_f = df_f[df_f[col_cdr].astype(str).isin(cdr_sel)]
 if col_rep and rep_sel:

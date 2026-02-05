@@ -950,6 +950,8 @@ with st.sidebar:
     st.divider()
     st.header("Filtri")
 
+    st.caption("Scegli se filtrare per Dipartimento (DESC. DIP) oppure per Area funzionale DAPSS (mappa da CDC/COD.REP.).")
+
     def opts(col):
         if not col:
             return []
@@ -968,20 +970,21 @@ with st.sidebar:
     ruolo_opts = opts(col_ruolo)
     dapss_opts = opts("DAPSS_AREA") if "DAPSS_AREA" in df_raw.columns else []
 
-    filtro_org = st.radio(
+    filtro_org = st.sidebar.radio(
         "Filtro organizzativo principale",
         ["Dipartimento (DESC. DIP)", "Area funzionale DAPSS (CDC)"],
         index=0,
+        key="filtro_org",
     )
 
     # Dipartimento vs DAPSS
     if filtro_org.startswith("Dipartimento"):
-        dip_sel = st.multiselect("Dipartimento", dip_opts, default=dip_opts) if dip_opts else []
+        dip_sel = st.sidebar.multiselect("Dipartimento", dip_opts, default=dip_opts) if dip_opts else []
         dapss_sel = []
     else:
         dip_sel = dip_opts  # non filtrare per dipartimento
         # override facoltativo della mappa CDC->DAPSS
-        with st.expander("🗺️ Mappa CDC → Area DAPSS (override facoltativo)"):
+        with st.sidebar.expander("🗺️ Mappa CDC → Area DAPSS (override facoltativo)"):
             st.caption("Formato: AREA<TAB>cdc1,c2,c3 (una riga per area). Esempio: AREA CHIRURGICA\t116,320,321")
             override_txt = st.text_area("Override mappa", value="", height=110)
             override_map = parse_dapss_override(override_txt)
@@ -991,22 +994,22 @@ with st.sidebar:
                 dapss_opts = sorted(df_raw["DAPSS_AREA"].dropna().astype(str).unique())
 
         default_dapss = [x for x in dapss_opts if x != "NON MAPPATO"]
-        dapss_sel = st.multiselect("Area DAPSS", dapss_opts, default=default_dapss) if dapss_opts else []
+        dapss_sel = st.sidebar.multiselect("Area DAPSS", dapss_opts, default=default_dapss) if dapss_opts else []
 
         if "_CDC_CODE" in df_raw.columns and "DAPSS_AREA" in df_raw.columns:
             unmapped = sorted(df_raw.loc[df_raw["DAPSS_AREA"] == "NON MAPPATO", "_CDC_CODE"].dropna().astype(int).unique().tolist())
             if len(unmapped) > 0:
-                st.info(f"CDC non mappati: {len(unmapped)} (es. {', '.join(map(str, unmapped[:10]))}{'...' if len(unmapped) > 10 else ''})")
+                st.sidebar.info(f"CDC non mappati: {len(unmapped)} (es. {', '.join(map(str, unmapped[:10]))}{'...' if len(unmapped) > 10 else ''})")
 
     # altri filtri
-    stab_sel = st.multiselect("Stabilimento", stab_opts, default=stab_opts) if stab_opts else []
-    cdr_sel = st.multiselect("CDR_DESC", cdr_opts, default=cdr_opts) if cdr_opts else []
-    rep_sel = st.multiselect("Reparto", rep_opts, default=rep_opts) if rep_opts else []
+    stab_sel = st.sidebar.multiselect("Stabilimento", stab_opts, default=stab_opts) if stab_opts else []
+    cdr_sel = st.sidebar.multiselect("CDR_DESC", cdr_opts, default=cdr_opts) if cdr_opts else []
+    rep_sel = st.sidebar.multiselect("Reparto", rep_opts, default=rep_opts) if rep_opts else []
 
     st.markdown("**Filtri professionali**")
-    prof_sel = st.multiselect("Profilo", prof_opts, default=prof_opts) if prof_opts else []
-    qual_sel = st.multiselect("Qualifica", qual_opts, default=qual_opts) if qual_opts else []
-    ruolo_sel = st.multiselect("Ruolo", ruolo_opts, default=ruolo_opts) if ruolo_opts else []
+    prof_sel = st.sidebar.multiselect("Profilo", prof_opts, default=prof_opts) if prof_opts else []
+    qual_sel = st.sidebar.multiselect("Qualifica", qual_opts, default=qual_opts) if qual_opts else []
+    ruolo_sel = st.sidebar.multiselect("Ruolo", ruolo_opts, default=ruolo_opts) if ruolo_opts else []
 # applica filtri
 df_f = df_raw.copy()
 # filtro organizzativo principale

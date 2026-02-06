@@ -103,7 +103,6 @@ EXPECTED_COLS = {
     "ORE DA RECUP. PROG.", "STR. PD. PROG.", "STR. PROG.",
     "FEST. INFRASETT. A PAGAMENTO", "FEST. INFRASETT. A RECUPERO",
     "CDR_DESC", "DESC. DIP.", "DESC. RUOLO",
-    "PRESTAZIONI AGGIUNTIVE"
 }
 
 
@@ -192,8 +191,7 @@ def build_detail_and_analisi(
         * mal/104/ecc
         * asp/grav/puer/dist
     - Straordinario (ore/FTE): include anche FESTIVI (pagato + recupero)
-    - Prestazioni aggiuntive: SOLO se la colonna esiste nel file (niente ricostruzione)
-    """
+        """
     df = df_raw.copy()
 
     c_pt = find_col(df, ["% PART-TIME", "% PART TIME", "PART-TIME", "PERC PART"], contains=True)
@@ -246,18 +244,6 @@ def build_detail_and_analisi(
     st_pag = col_or_zero(["STR. PROG."])
     fest_pag = col_or_zero(["FEST. INFRASETT. A PAGAMENTO"])
     fest_rec = col_or_zero(["FEST. INFRASETT. A RECUPERO"])
-
-    # -------------------------
-    # PRESTAZIONI AGGIUNTIVE (ORE)
-    # - SOLO se presente nel file
-    # -------------------------
-    c_prest = find_col(df, ["PRESTAZIONI AGGIUNTIVE", "PREST. AGGIUNTIVE", "PRESTAZ"], contains=True)
-    has_prest = bool(c_prest)
-    if has_prest:
-        prest_agg = to_num_series(df[c_prest])
-    else:
-        prest_agg = None  # niente ricostruzione
-
     # -------------------------
     # FTE (da % PART-TIME)
     # -------------------------
@@ -325,9 +311,6 @@ def build_detail_and_analisi(
     df["FEST_PAG"] = fest_pag
     df["FEST_REC"] = fest_rec
 
-    if has_prest and prest_agg is not None:
-        df["PREST_AGG_ORE"] = prest_agg
-
     # scope
     df_scope = df[df["SERVIZIO"].notna()].copy()
 
@@ -359,8 +342,6 @@ def build_detail_and_analisi(
         "mal/104/ecc (ore)": ("MAL_104_ECC_ORE", "sum"),
         "asp/grav/puer/dist (ore)": ("ASP_GRAV_PUER_DIST_ORE", "sum"),
     }
-    if has_prest:
-        agg_cols["Prestazioni aggiuntive (ore)"] = ("PREST_AGG_ORE", "sum")
 
     agg = df_scope.groupby(["SERVIZIO", "QUALIFICA_OUT"], dropna=False).agg(
         OPERATORI=(matr_col, "nunique") if matr_col else ("QUALIFICA_OUT", "size"),
@@ -381,6 +362,7 @@ def build_detail_and_analisi(
     ordered = [
         "UUOO/SERVIZIO", "QUALIFICA", "OPERATORI",
         "FTE 2025", "FTE 2026",
+        "Assenze totali (ore)",
         "Assenze medie FTE",
         "st Recupero", "st PD pagato", "st Pagato",
         "Festivo pagato", "Festivo recupero",
@@ -391,13 +373,11 @@ def build_detail_and_analisi(
         "Media procapite ferie residue al 01/01/2026",
         "mal/104/ecc (ore)", "asp/grav/puer/dist (ore)",
     ]
-    if has_prest:
-        ordered.append("Prestazioni aggiuntive (ore)")
 
     agg = agg[ordered].sort_values(["UUOO/SERVIZIO", "QUALIFICA"]).reset_index(drop=True)
-    return agg, df_scope, has_prest
+    return agg, df_scope
 
-def compute_kpi(df_scope: pd.DataFrame, ore_annue_fte: float, has_prest: bool):
+def compute_kpi(df_scope: pd.DataFrame, ore_annue_fte: float):
     c_matr = find_col(df_scope, ["MATRICOLA"], contains=True)
     n_operatori = int(df_scope[c_matr].nunique()) if c_matr and c_matr in df_scope.columns else int(len(df_scope))
 
@@ -428,12 +408,6 @@ def compute_kpi(df_scope: pd.DataFrame, ore_annue_fte: float, has_prest: bool):
         st_tot = 0.0
     st_x_fte = (st_tot / fte_tot) if fte_tot > 0 else np.nan
 
-    prest_tot = np.nan
-    prest_x_fte = np.nan
-    if has_prest and "PREST_AGG_ORE" in df_scope.columns:
-        prest_tot = float(df_scope["PREST_AGG_ORE"].sum())
-        prest_x_fte = (prest_tot / fte_tot) if fte_tot > 0 else np.nan
-
     # Breakdown (solo 2 blocchi coerenti con ASSENZE_TOT_ORE)
     breakdown = []
     if ore_annue_fte > 0 and fte_tot > 0:
@@ -452,7 +426,6 @@ def compute_kpi(df_scope: pd.DataFrame, ore_annue_fte: float, has_prest: bool):
     )
 
     return {
-        "has_prest": has_prest,
         "n_operatori": n_operatori,
         "fte_tot": fte_tot,
         "ore_teo_tot": ore_teo_tot,
@@ -467,12 +440,10 @@ def compute_kpi(df_scope: pd.DataFrame, ore_annue_fte: float, has_prest: bool):
         "res_giorni_media": res_giorni_media,
         "st_tot": st_tot,
         "st_x_fte": st_x_fte,
-        "prest_tot": prest_tot,
-        "prest_x_fte": prest_x_fte,
         "df_break": df_break,
     }
 
-def totals_row_from_scope(df_scope: pd.DataFrame, ore_annue_fte: float, has_prest: bool):
+def totals_row_from_scope(df_scope: pd.DataFrame, ore_annue_fte: float):
     """Riga totali coerente con la tabella unica stile PDF."""
     c_matr = find_col(df_scope, ["MATRICOLA"], contains=True)
     n_operatori = int(df_scope[c_matr].nunique()) if c_matr and c_matr in df_scope.columns else int(len(df_scope))
@@ -508,6 +479,7 @@ def totals_row_from_scope(df_scope: pd.DataFrame, ore_annue_fte: float, has_pres
         "OPERATORI": n_operatori,
         "FTE 2025": fte_2025,
         "FTE 2026": fte_2026,
+        "Assenze totali (ore)": abs_tot,
         "Assenze medie FTE": assenze_medie_fte,
         "st Recupero": st_rec,
         "st PD pagato": st_pd,
@@ -523,8 +495,6 @@ def totals_row_from_scope(df_scope: pd.DataFrame, ore_annue_fte: float, has_pres
         "mal/104/ecc (ore)": mal_104_ecc,
         "asp/grav/puer/dist (ore)": asp_grav,
     }
-    if has_prest and "PREST_AGG_ORE" in df_scope.columns:
-        row["Prestazioni aggiuntive (ore)"] = float(df_scope["PREST_AGG_ORE"].sum())
 
     return pd.DataFrame([row])
 
@@ -594,7 +564,7 @@ def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_c
     gb = gb[cols_out].sort_values(["UUOO/SERVIZIO", "QUALIFICA"]).reset_index(drop=True)
     return gb
 
-def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, has_prest: bool):
+def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float):
     c_matr = find_col(df_sub, ["MATRICOLA"], contains=True)
     c_cogn = find_col(df_sub, ["COGNOME"], contains=True)
     c_nome = find_col(df_sub, ["NOME"], contains=True)
@@ -633,9 +603,6 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, has_prest: bo
         "asp/grav/puer/dist (ore)": ("ASP_GRAV_PUER_DIST_ORE", "sum"),
     }
 
-    if has_prest and "PREST_AGG_ORE" in df_sub.columns:
-        agg_dict["PREST_AGG_ORE"] = ("PREST_AGG_ORE", "sum")
-
     gb = df_sub.groupby(key_cols, dropna=False).agg(**{k: v for k, v in agg_dict.items()}).reset_index()
 
     # --- helper: aggiunge colonna "first" solo se serve e senza collisioni ---
@@ -669,9 +636,6 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, has_prest: bo
     gb["STRAORD_TOT_ORE"] = gb["ST_REC"] + gb["ST_PD"] + gb["ST_PAG"] + gb["FEST_PAG"] + gb["FEST_REC"]
     gb["STRAORD_ORE_X_FTE"] = np.where(gb["FTE"] > 0, gb["STRAORD_TOT_ORE"] / gb["FTE"], np.nan)
 
-    if has_prest and "PREST_AGG_ORE" in gb.columns:
-        gb["PREST_ORE_X_FTE"] = np.where(gb["FTE"] > 0, gb["PREST_AGG_ORE"] / gb["FTE"], np.nan)
-
     gb["FERIE_RES_GIORNI_X_FTE"] = np.where(gb["FTE"] > 0, gb["FERIE_RES_GIORNI"] / gb["FTE"], np.nan)
 
     # --- display PERSONA ---
@@ -697,8 +661,6 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float, has_prest: bo
         "FERIE_MAT_GIORNI", "FERIE_FRUITE_GIORNI",
         "mal/104/ecc (ore)", "asp/grav/puer/dist (ore)",
     ]
-    if has_prest and "PREST_AGG_ORE" in gb.columns:
-        cols_metrics += ["PREST_AGG_ORE", "PREST_ORE_X_FTE"]
 
     cols_metrics = [c for c in cols_metrics if c in gb.columns]
     other_cols = [c for c in gb.columns if c not in cols_front + cols_metrics]
@@ -1014,14 +976,14 @@ if col_ruolo and ruolo_sel:
     df_f = df_f[df_f[col_ruolo].astype(str).isin(ruolo_sel)]
 
 # costruzione analisi + scope
-analisi, df_scope, has_prest = build_detail_and_analisi(
+analisi, df_scope = build_detail_and_analisi(
     df_f,
     only_in_force=only_in_force,
     cess_cutoff=cess_cutoff,
     ore_annue_fte=ore_annue_fte,
 )
 # KPI globali
-k_global = compute_kpi(df_scope, ore_annue_fte=ore_annue_fte, has_prest=has_prest)
+k_global = compute_kpi(df_scope, ore_annue_fte=ore_annue_fte)
 
 st.subheader("KPI (aggiornati dai filtri)")
 with st.container(border=True):
@@ -1031,17 +993,10 @@ with st.container(border=True):
     r1[2].metric("Assenteismo % (su 1470h/FTE)", f"{k_global['ass_pct']:.2f}%" if not np.isnan(k_global["ass_pct"]) else "n/d")
     r1[3].metric("FTE mediamente assenti", f"{k_global['fte_assenti']:.2f}" if not np.isnan(k_global["fte_assenti"]) else "n/d")
 
-    if has_prest:
-        r2 = st.columns(4)
-        r2[0].metric("FTE disponibili", f"{k_global['fte_disp']:.2f}" if not np.isnan(k_global["fte_disp"]) else "n/d")
-        r2[1].metric("Straordinario (ore/FTE)", f"{k_global['st_x_fte']:.2f}" if not np.isnan(k_global["st_x_fte"]) else "n/d")
-        r2[2].metric("Prestazioni agg (ore/FTE)", f"{k_global['prest_x_fte']:.2f}" if not np.isnan(k_global["prest_x_fte"]) else "n/d")
-        r2[3].metric("Residuo ferie medio (gg/op)", f"{k_global['res_giorni_media']:.2f}" if not np.isnan(k_global["res_giorni_media"]) else "n/d")
-    else:
-        r2 = st.columns(3)
-        r2[0].metric("FTE disponibili", f"{k_global['fte_disp']:.2f}" if not np.isnan(k_global["fte_disp"]) else "n/d")
-        r2[1].metric("Straordinario (ore/FTE)", f"{k_global['st_x_fte']:.2f}" if not np.isnan(k_global["st_x_fte"]) else "n/d")
-        r2[2].metric("Residuo ferie medio (gg/op)", f"{k_global['res_giorni_media']:.2f}" if not np.isnan(k_global["res_giorni_media"]) else "n/d")
+    r2 = st.columns(3)
+    r2[0].metric("FTE disponibili", f"{k_global['fte_disp']:.2f}" if not np.isnan(k_global["fte_disp"]) else "n/d")
+    r2[1].metric("Straordinario (ore/FTE)", f"{k_global['st_x_fte']:.2f}" if not np.isnan(k_global["st_x_fte"]) else "n/d")
+    r2[2].metric("Residuo ferie medio (gg/op)", f"{k_global['res_giorni_media']:.2f}" if not np.isnan(k_global["res_giorni_media"]) else "n/d")
 
 st.divider()
 
@@ -1058,7 +1013,7 @@ with tab1:
     st.subheader("Tabella ANALISI_DOTAZIONI (unica – come report PDF)")
     st.caption("La tabella include FTE 2025/2026 (con cessazioni), assenze, ferie e straordinari/festivi, con riga TOTALE in fondo.")
 
-    df_total = totals_row_from_scope(df_scope, ore_annue_fte=ore_annue_fte, has_prest=has_prest)
+    df_total = totals_row_from_scope(df_scope, ore_annue_fte=ore_annue_fte)
     analisi_show = pd.concat([analisi, df_total], ignore_index=True)
 
     # arrotonda solo le colonne numeriche (senza toccare i testi)
@@ -1115,8 +1070,6 @@ with tab2:
         "FEST_PAG": ("FEST_PAG", "sum"),
         "FEST_REC": ("FEST_REC", "sum"),
     }
-    if has_prest and "PREST_AGG_ORE" in df_scope.columns:
-        agg_map["PREST_AGG_ORE"] = ("PREST_AGG_ORE", "sum")
 
     df_dim = (
         df_scope.groupby(dim_col)
@@ -1132,8 +1085,6 @@ with tab2:
     df_dim["STRAORD_TOT_ORE"] = df_dim["ST_REC"] + df_dim["ST_PD"] + df_dim["ST_PAG"] + df_dim["FEST_PAG"] + df_dim["FEST_REC"]
     df_dim["STRAORD_ORE_X_FTE"] = np.where(df_dim["FTE"] > 0, df_dim["STRAORD_TOT_ORE"] / df_dim["FTE"], np.nan)
 
-    if has_prest and "PREST_AGG_ORE" in df_dim.columns:
-        df_dim["PREST_ORE_X_FTE"] = np.where(df_dim["FTE"] > 0, df_dim["PREST_AGG_ORE"] / df_dim["FTE"], np.nan)
 
     df_dim["FERIE_RES_GIORNI_X_TESTA"] = np.where(df_dim["OPERATORI"] > 0, df_dim["FERIE_RES_GIORNI"] / df_dim["OPERATORI"], np.nan)
 
@@ -1146,8 +1097,6 @@ with tab2:
         "Ferie residue (gg/testa)": "FERIE_RES_GIORNI_X_TESTA",
         "FTE persi per assenze": "FTE_PERSI_ASSENZE",
     }
-    if has_prest and "PREST_ORE_X_FTE" in df_dim.columns:
-        scatter_opts["Prestazioni aggiuntive (ore/FTE)"] = "PREST_ORE_X_FTE"
     c_sc1, c_sc2, c_sc3 = st.columns(3)
     x_metric = c_sc1.selectbox("Asse X", list(scatter_opts.keys()), index=0, key="sc_x")
     y_metric = c_sc2.selectbox("Asse Y", list(scatter_opts.keys()), index=1, key="sc_y")
@@ -1225,7 +1174,7 @@ with tab3:
 
     chosen_label_short = ", ".join(chosen_dims[:3]) + (" …" if len(chosen_dims) > 3 else "")
     df_rep = df_scope[df_scope[dim_col].astype(str).isin([str(x) for x in chosen_dims])].copy()
-    k_rep = compute_kpi(df_rep, ore_annue_fte=ore_annue_fte, has_prest=has_prest)
+    k_rep = compute_kpi(df_rep, ore_annue_fte=ore_annue_fte)
 
     st.markdown(f"### KPI – {dim_label}: **{chosen_label_short}**")
     with st.container(border=True):
@@ -1234,23 +1183,17 @@ with tab3:
         a[1].metric("FTE", f"{k_rep['fte_tot']:.2f}")
         a[2].metric("Assenteismo %", f"{k_rep['ass_pct']:.2f}%" if not np.isnan(k_rep["ass_pct"]) else "n/d")
         a[3].metric("FTE assenti", f"{k_rep['fte_assenti']:.2f}" if not np.isnan(k_rep["fte_assenti"]) else "n/d")
-        if has_prest:
-            b = st.columns(4)
-            b[0].metric("FTE disponibili", f"{k_rep['fte_disp']:.2f}" if not np.isnan(k_rep["fte_disp"]) else "n/d")
-            b[1].metric("Straordinario (ore/FTE)", f"{k_rep['st_x_fte']:.2f}" if not np.isnan(k_rep["st_x_fte"]) else "n/d")
-            b[2].metric("Prestazioni agg (ore/FTE)", f"{k_rep['prest_x_fte']:.2f}" if not np.isnan(k_rep["prest_x_fte"]) else "n/d")
-            b[3].metric("Residuo ferie medio (gg/op)", f"{k_rep['res_giorni_media']:.2f}" if not np.isnan(k_rep["res_giorni_media"]) else "n/d")
-        else:
-            b = st.columns(3)
-            b[0].metric("FTE disponibili", f"{k_rep['fte_disp']:.2f}" if not np.isnan(k_rep["fte_disp"]) else "n/d")
-            b[1].metric("Straordinario (ore/FTE)", f"{k_rep['st_x_fte']:.2f}" if not np.isnan(k_rep["st_x_fte"]) else "n/d")
-            b[2].metric("Residuo ferie medio (gg/op)", f"{k_rep['res_giorni_media']:.2f}" if not np.isnan(k_rep["res_giorni_media"]) else "n/d")
+        b = st.columns(3)
+        b[0].metric("FTE disponibili", f"{k_rep['fte_disp']:.2f}" if not np.isnan(k_rep["fte_disp"]) else "n/d")
+        b[1].metric("Straordinario (ore/FTE)", f"{k_rep['st_x_fte']:.2f}" if not np.isnan(k_rep["st_x_fte"]) else "n/d")
+        b[2].metric("Residuo ferie medio (gg/op)", f"{k_rep['res_giorni_media']:.2f}" if not np.isnan(k_rep["res_giorni_media"]) else "n/d")
+
 
     st.divider()
 
     # Tabella persone
     st.markdown("### Persone (indicatori individuali)")
-    df_people = build_people_table(df_rep, ore_annue_fte=ore_annue_fte, has_prest=has_prest)
+    df_people = build_people_table(df_rep, ore_annue_fte=ore_annue_fte)
 
     if df_people.empty:
         st.info("Non riesco a costruire la tabella persone (manca MATRICOLA o anagrafica).")

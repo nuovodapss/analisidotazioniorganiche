@@ -338,9 +338,7 @@ def build_detail_and_analisi(
         "Ferie maturate 2025": ("FERIE_MAT_2025", "sum"),
         "Ferie fruite 2025": ("FERIE_FRUITE_2025", "sum"),
         "Ferie residue al 01/01/2026": ("FERIE_RES_0101", "sum"),
-        "Assenze totali (ore)": ("ASSENZE_TOT_ORE", "sum"),
-        "mal/104/ecc (ore)": ("MAL_104_ECC_ORE", "sum"),
-        "asp/grav/puer/dist (ore)": ("ASP_GRAV_PUER_DIST_ORE", "sum"),
+        "Assenze (ore)": ("ASSENZE_TOT_ORE", "sum"),
     }
 
     agg = df_scope.groupby(["SERVIZIO", "QUALIFICA_OUT"], dropna=False).agg(
@@ -351,7 +349,7 @@ def build_detail_and_analisi(
     agg.rename(columns={"SERVIZIO": "UUOO/SERVIZIO", "QUALIFICA_OUT": "QUALIFICA"}, inplace=True)
 
     # Derivate come nel PDF
-    agg["Assenze medie FTE"] = np.where(ore_annue_fte > 0, agg["Assenze totali (ore)"] / ore_annue_fte, np.nan)
+    agg["Assenze medie FTE"] = np.where(ore_annue_fte > 0, agg["Assenze (ore)"] / ore_annue_fte, np.nan)
 
     st_tot = agg["st Recupero"] + agg["st PD pagato"] + agg["st Pagato"] + agg["Festivo pagato"] + agg["Festivo recupero"]
     agg["ST media (ore/FTE)"] = np.where(agg["FTE 2025"] > 0, st_tot / agg["FTE 2025"], np.nan)
@@ -362,7 +360,7 @@ def build_detail_and_analisi(
     ordered = [
         "UUOO/SERVIZIO", "QUALIFICA", "OPERATORI",
         "FTE 2025", "FTE 2026",
-        "Assenze totali (ore)",
+        "Assenze (ore)",
         "Assenze medie FTE",
         "st Recupero", "st PD pagato", "st Pagato",
         "Festivo pagato", "Festivo recupero",
@@ -371,7 +369,6 @@ def build_detail_and_analisi(
         "Media procapite ferie fruite 2025",
         "Ferie residue al 01/01/2026",
         "Media procapite ferie residue al 01/01/2026",
-        "mal/104/ecc (ore)", "asp/grav/puer/dist (ore)",
     ]
 
     agg = agg[ordered].sort_values(["UUOO/SERVIZIO", "QUALIFICA"]).reset_index(drop=True)
@@ -469,17 +466,13 @@ def totals_row_from_scope(df_scope: pd.DataFrame, ore_annue_fte: float):
 
     abs_tot = float(df_scope["ASSENZE_TOT_ORE"].sum()) if "ASSENZE_TOT_ORE" in df_scope.columns else 0.0
     assenze_medie_fte = (abs_tot / ore_annue_fte) if ore_annue_fte > 0 else np.nan
-
-    mal_104_ecc = float(df_scope["MAL_104_ECC_ORE"].sum()) if "MAL_104_ECC_ORE" in df_scope.columns else 0.0
-    asp_grav = float(df_scope["ASP_GRAV_PUER_DIST_ORE"].sum()) if "ASP_GRAV_PUER_DIST_ORE" in df_scope.columns else 0.0
-
     row = {
         "UUOO/SERVIZIO": "TOTALE",
         "QUALIFICA": "",
         "OPERATORI": n_operatori,
         "FTE 2025": fte_2025,
         "FTE 2026": fte_2026,
-        "Assenze totali (ore)": abs_tot,
+        "Assenze (ore)": abs_tot,
         "Assenze medie FTE": assenze_medie_fte,
         "st Recupero": st_rec,
         "st PD pagato": st_pd,
@@ -492,8 +485,7 @@ def totals_row_from_scope(df_scope: pd.DataFrame, ore_annue_fte: float):
         "Media procapite ferie fruite 2025": media_fruite,
         "Ferie residue al 01/01/2026": ferie_res,
         "Media procapite ferie residue al 01/01/2026": media_residue,
-        "mal/104/ecc (ore)": mal_104_ecc,
-        "asp/grav/puer/dist (ore)": asp_grav,
+
     }
 
     return pd.DataFrame([row])
@@ -1010,7 +1002,7 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1
 # =========================
 with tab1:
-    st.subheader("Tabella ANALISI_DOTAZIONI (unica – come report PDF)")
+    st.subheader("Tabella Analisi Dotazioni")
     st.caption("La tabella include FTE 2025/2026 (con cessazioni), assenze, ferie e straordinari/festivi, con riga TOTALE in fondo.")
 
     df_total = totals_row_from_scope(df_scope, ore_annue_fte=ore_annue_fte)

@@ -1176,18 +1176,101 @@ with tab3:
     df_rep = df_scope[df_scope[dim_col].astype(str).isin([str(x) for x in chosen_dims])].copy()
     k_rep = compute_kpi(df_rep, ore_annue_fte=ore_annue_fte)
 
-    st.markdown(f"### KPI – {dim_label}: **{chosen_label_short}**")
-    with st.container(border=True):
-        a = st.columns(4)
-        a[0].metric("Operatori", f"{k_rep['n_operatori']}")
-        a[1].metric("FTE", f"{k_rep['fte_tot']:.2f}")
-        a[2].metric("Assenteismo %", f"{k_rep['ass_pct']:.2f}%" if not np.isnan(k_rep["ass_pct"]) else "n/d")
-        a[3].metric("FTE assenti", f"{k_rep['fte_assenti']:.2f}" if not np.isnan(k_rep["fte_assenti"]) else "n/d")
-        b = st.columns(3)
-        b[0].metric("FTE disponibili", f"{k_rep['fte_disp']:.2f}" if not np.isnan(k_rep["fte_disp"]) else "n/d")
-        b[1].metric("Straordinario (ore/FTE)", f"{k_rep['st_x_fte']:.2f}" if not np.isnan(k_rep["st_x_fte"]) else "n/d")
-        b[2].metric("Residuo ferie medio (gg/op)", f"{k_rep['res_giorni_media']:.2f}" if not np.isnan(k_rep["res_giorni_media"]) else "n/d")
+    st.markdown(f"### Indicatori di composizione – {dim_label}: **{chosen_label_short}**")
 
+    # -------------------------
+    # Deltas "interni" al reparto
+    # -------------------------
+    teste = int(k_rep.get("n_operatori", 0))
+    fte = float(k_rep.get("fte_tot", 0.0))
+
+    delta_teste_fte = (teste - fte) if fte is not None else np.nan
+    ratio_teste_fte = (teste / fte) if fte > 0 else np.nan
+
+    # Ore lavorate vs ore teoriche (ore)
+    col_ore_lav = find_col(df_rep, ["ORE LAVORATE"], contains=True)
+    col_ore_teo_file = find_col(df_rep, ["ORE TEORICHE"], contains=True)
+
+    ore_lav = float(to_num_series(df_rep[col_ore_lav]).sum()) if col_ore_lav else np.nan
+    ore_teo_file = float(to_num_series(df_rep[col_ore_teo_file]).sum()) if col_ore_teo_file else np.nan
+    ore_teo = ore_teo_file if (col_ore_teo_file and ore_teo_file > 0) else float(fte * ore_annue_fte)
+
+    ore_gap = (ore_lav - ore_teo) if (not np.isnan(ore_lav) and ore_teo > 0) else np.nan
+    copertura = (ore_lav / ore_teo * 100) if (not np.isnan(ore_lav) and ore_teo > 0) else np.nan
+
+    # Ferie (giorni) – sempre in giorni
+    ferie_res = float(to_num_series(df_rep["FERIE_RES_0101"]).sum()) if "FERIE_RES_0101" in df_rep.columns else np.nan
+    ferie_mat = float(to_num_series(df_rep["FERIE_MAT_2025"]).sum()) if "FERIE_MAT_2025" in df_rep.columns else np.nan
+    ferie_fruite = float(to_num_series(df_rep["FERIE_FRUITE_2025"]).sum()) if "FERIE_FRUITE_2025" in df_rep.columns else np.nan
+
+    saldo_ferie = (ferie_mat - ferie_fruite) if (not np.isnan(ferie_mat) and not np.isnan(ferie_fruite)) else np.nan
+    ferie_da_fruire = max(saldo_ferie, 0.0) if not np.isnan(saldo_ferie) else np.nan
+    ferie_res_media = (ferie_res / teste) if (teste > 0 and not np.isnan(ferie_res)) else np.nan
+
+    # Mostra KPI principali richiesti (senza box)
+    rA = st.columns(4)
+    rA[0].metric(
+        "Teste (n)",
+        f"{teste}",
+        delta=(f"{delta_teste_fte:+.2f} vs FTE" if not np.isnan(delta_teste_fte) else ""),
+        delta_color="off",
+    )
+    rA[1].metric("FTE", f"{fte:.2f}")
+    rA[2].metric(
+        "Teste/FTE",
+        f"{ratio_teste_fte:.2f}" if not np.isnan(ratio_teste_fte) else "n/d",
+        delta=(f"{(ratio_teste_fte - 1) * 100:+.1f}% vs 1.00" if not np.isnan(ratio_teste_fte) else ""),
+        delta_color="off",
+    )
+    rA[3].metric(
+        "FTE disponibili",
+        f"{k_rep['fte_disp']:.2f}" if not np.isnan(k_rep.get("fte_disp", np.nan)) else "n/d",
+    )
+
+    rB = st.columns(4)
+    rB[0].metric("Ore teoriche (h)", f"{ore_teo:.0f}" if not np.isnan(ore_teo) else "n/d")
+    rB[1].metric(
+        "Ore lavorate (h)",
+        f"{ore_lav:.0f}" if not np.isnan(ore_lav) else "n/d",
+        delta=(f"{ore_gap:+.0f} vs teoriche" if not np.isnan(ore_gap) else ""),
+        delta_color="off",
+    )
+    rB[2].metric(
+        "Copertura ore (%)",
+        f"{copertura:.1f}%" if not np.isnan(copertura) else "n/d",
+        delta=(f"{(copertura - 100):+.1f} pp vs 100%" if not np.isnan(copertura) else ""),
+        delta_color="off",
+    )
+    rB[3].metric(
+        "Straordinario+Festivi (h/FTE)",
+        f"{k_rep['st_x_fte']:.2f}" if not np.isnan(k_rep.get("st_x_fte", np.nan)) else "n/d",
+    )
+
+    rC = st.columns(4)
+    rC[0].metric(
+        "Residuo ferie al 01/01/2026 (gg)",
+        f"{ferie_res:.0f}" if not np.isnan(ferie_res) else "n/d",
+        delta=(f"{ferie_res:+.0f} vs 0" if not np.isnan(ferie_res) else ""),
+        delta_color="inverse",
+    )
+    rC[1].metric(
+        "Residuo ferie medio (gg/op)",
+        f"{ferie_res_media:.1f}" if not np.isnan(ferie_res_media) else "n/d",
+        delta=(f"{ferie_res_media:+.1f} vs 0" if not np.isnan(ferie_res_media) else ""),
+        delta_color="inverse",
+    )
+    rC[2].metric(
+        "Saldo ferie 2025 (mat - fruite) (gg)",
+        f"{saldo_ferie:.0f}" if not np.isnan(saldo_ferie) else "n/d",
+        delta=(f"{saldo_ferie:+.0f} vs 0" if not np.isnan(saldo_ferie) else ""),
+        delta_color="inverse",
+    )
+    rC[3].metric(
+        "Ferie da far fruire (gg)",
+        f"{ferie_da_fruire:.0f}" if not np.isnan(ferie_da_fruire) else "n/d",
+        delta=(f"{ferie_da_fruire:+.0f} vs 0" if not np.isnan(ferie_da_fruire) else ""),
+        delta_color="inverse",
+    )
 
     st.divider()
 
@@ -1246,29 +1329,166 @@ with tab3:
     df_tot_row = _make_people_total_row(df_people)
     df_people_all = pd.concat([df_people, df_tot_row], ignore_index=True)
 
+
+    # colonne leggibili per la tabella persone
+    people_col_labels = {
+        "MATRICOLA": "Matricola",
+        "PERSONA": "Persona",
+        "COGNOME": "Cognome",
+        "NOME": "Nome",
+        "PROFILO": "Profilo",
+        "QUALIFICA_RAW": "Qualifica (raw)",
+        "FTE": "FTE",
+        "ORE_TEORICHE": "Ore teoriche (h)",
+        "ASSENZE_ORE": "Assenze (h)",
+        "ASSENTEISMO_%": "Assenteismo (%)",
+        "FTE_ASSENTI": "FTE assenti",
+        "FTE_DISPONIBILI": "FTE disponibili",
+        "STRAORD_TOT_ORE": "Straordinario+Festivi (h)",
+        "STRAORD_ORE_X_FTE": "Straordinario+Festivi (h/FTE)",
+        "ST_REC": "Recupero (h)",
+        "ST_PD": "Straordinario PD (h)",
+        "ST_PAG": "Straordinario pagato (h)",
+        "FEST_PAG": "Festivo pagato (h)",
+        "FEST_REC": "Festivo a recupero (h)",
+        "FERIE_RES_GIORNI": "Ferie residue (gg)",
+        "FERIE_RES_GIORNI_X_FTE": "Ferie residue (gg/FTE)",
+        "FERIE_MAT_GIORNI": "Ferie maturate 2025 (gg)",
+        "FERIE_FRUITE_GIORNI": "Ferie fruite 2025 (gg)",
+        "mal/104/ecc (ore)": "Assenze mal/104/ecc (h)",
+        "asp/grav/puer/dist (ore)": "Assenze asp/grav/puer/dist (h)",
+    }
+    matr_col_people = find_col(df_people, ["MATRICOLA"], contains=True)
+    if matr_col_people and matr_col_people != "MATRICOLA":
+        people_col_labels[matr_col_people] = "Matricola"
+
     # controlli
     cX, cY = st.columns(2)
-    sort_by = cX.selectbox(
-        "Ordina per",
-        ["ASSENTEISMO_%", "ASSENZE_ORE", "STRAORD_TOT_ORE", "FERIE_RES_GIORNI", "FTE_DISPONIBILI", "FTE"],
-        index=0
-    )
+    sort_options = {
+        "Assenteismo (%)": "ASSENTEISMO_%",
+        "Assenze (h)": "ASSENZE_ORE",
+        "Straordinario+Festivi (h)": "STRAORD_TOT_ORE",
+        "Ferie residue (gg)": "FERIE_RES_GIORNI",
+        "FTE disponibili": "FTE_DISPONIBILI",
+        "FTE": "FTE",
+    }
+    sort_label = cX.selectbox("Ordina per", list(sort_options.keys()), index=0)
+    sort_by = sort_options[sort_label]
     top_people = cY.slider("Mostra top N persone", 10, 300, 50, step=10)
 
     df_show = df_people.sort_values(sort_by, ascending=False).head(top_people)
     df_show_disp = pd.concat([df_show, df_tot_row], ignore_index=True)
+    df_show_disp = df_show_disp.rename(columns=people_col_labels)
+
     st.dataframe(df_show_disp, use_container_width=True, height=420)
 
-    # download
+    # KPI con delta entro reparto: confronto reparto vs resto reparto (escludendo Top N persone mostrate)
+    st.markdown(f"### KPI – Delta entro reparto (reparto vs resto, esclusi Top {top_people})")
+
+    # Costruisco il "resto reparto" escludendo le persone presenti in df_show
+    c_matr_rep = find_col(df_rep, ["MATRICOLA"], contains=True)
+    df_rest = pd.DataFrame(columns=df_rep.columns)
+
+    if c_matr_rep and c_matr_rep in df_rep.columns and "MATRICOLA" in df_show.columns:
+        top_ids = df_show["MATRICOLA"].dropna().unique().tolist()
+        if top_ids:
+            df_rest = df_rep.loc[~df_rep[c_matr_rep].isin(top_ids)].copy()
+    elif "PERSONA" in df_show.columns and "PERSONA" in df_rep.columns:
+        top_ids = df_show["PERSONA"].dropna().unique().tolist()
+        if top_ids:
+            df_rest = df_rep.loc[~df_rep["PERSONA"].isin(top_ids)].copy()
+
+    k_rest = compute_kpi(df_rest, ore_annue_fte=ore_annue_fte) if not df_rest.empty else None
+
+    def _safe(v):
+        try:
+            v = float(v)
+            return v if not np.isnan(v) else np.nan
+        except Exception:
+            return np.nan
+
+    def _h_per_fte(k):
+        f = _safe(k.get("fte_tot"))
+        h = _safe(k.get("abs_tot_ore"))
+        return (h / f) if f and f > 0 else np.nan
+
+    def _ferie_res_per_fte(k):
+        f = _safe(k.get("fte_tot"))
+        g = _safe(k.get("ferie_res_giorni"))
+        return (g / f) if f and f > 0 else np.nan
+
+    # valori reparto
+    rep_ass_pct = _safe(k_rep.get("ass_pct"))
+    rep_hpf = _h_per_fte(k_rep)
+    rep_fte_disp = _safe(k_rep.get("fte_disp"))
+    rep_st_x = _safe(k_rep.get("st_x_fte"))
+    rep_res_media = _safe(k_rep.get("res_giorni_media"))
+    rep_res_pf = _ferie_res_per_fte(k_rep)
+
+    # valori resto reparto (se disponibile)
+    rest_ass_pct = _safe(k_rest.get("ass_pct")) if k_rest else np.nan
+    rest_hpf = _h_per_fte(k_rest) if k_rest else np.nan
+    rest_fte_disp = _safe(k_rest.get("fte_disp")) if k_rest else np.nan
+    rest_st_x = _safe(k_rest.get("st_x_fte")) if k_rest else np.nan
+    rest_res_media = _safe(k_rest.get("res_giorni_media")) if k_rest else np.nan
+    rest_res_pf = _ferie_res_per_fte(k_rest) if k_rest else np.nan
+
+    with st.container(border=True):
+        r1 = st.columns(3)
+        r1[0].metric(
+            "Assenteismo (%) – reparto",
+            f"{rep_ass_pct:.2f}%" if not np.isnan(rep_ass_pct) else "n/d",
+            # più alto = peggio -> delta negativo se il reparto è peggiore del resto
+            delta=(rest_ass_pct - rep_ass_pct) if (not np.isnan(rest_ass_pct) and not np.isnan(rep_ass_pct)) else None,
+        )
+        r1[1].metric(
+            "Assenze (h/FTE) – reparto",
+            f"{rep_hpf:.1f}" if not np.isnan(rep_hpf) else "n/d",
+            # più alto = peggio
+            delta=(rest_hpf - rep_hpf) if (not np.isnan(rest_hpf) and not np.isnan(rep_hpf)) else None,
+        )
+        r1[2].metric(
+            "FTE disponibili – reparto",
+            f"{rep_fte_disp:.2f}" if not np.isnan(rep_fte_disp) else "n/d",
+            # più alto = meglio
+            delta=(rep_fte_disp - rest_fte_disp) if (not np.isnan(rest_fte_disp) and not np.isnan(rep_fte_disp)) else None,
+        )
+
+        r2 = st.columns(3)
+        r2[0].metric(
+            "Straordinario+Festivi (h/FTE) – reparto",
+            f"{rep_st_x:.2f}" if not np.isnan(rep_st_x) else "n/d",
+            # più alto = peggio
+            delta=(rest_st_x - rep_st_x) if (not np.isnan(rest_st_x) and not np.isnan(rep_st_x)) else None,
+        )
+        r2[1].metric(
+            "Residuo ferie medio (gg/op) – reparto",
+            f"{rep_res_media:.2f}" if not np.isnan(rep_res_media) else "n/d",
+            # più alto = peggio (più accumulo)
+            delta=(rest_res_media - rep_res_media) if (not np.isnan(rest_res_media) and not np.isnan(rep_res_media)) else None,
+        )
+        r2[2].metric(
+            "Residuo ferie (gg/FTE) – reparto",
+            f"{rep_res_pf:.2f}" if not np.isnan(rep_res_pf) else "n/d",
+            # più alto = peggio
+            delta=(rest_res_pf - rep_res_pf) if (not np.isnan(rest_res_pf) and not np.isnan(rep_res_pf)) else None,
+        )
+
+    st.caption("Δ rispetto al **resto del reparto** (stesso reparto, escludendo le Top N persone mostrate): **positivo = meglio**, **negativo = peggiora** (freccia rossa ↓).")
+
+
+    # download (con nomi colonne leggibili)
+    df_people_all_disp = df_people_all.rename(columns=people_col_labels)
+
     st.download_button(
         "Scarica persone (CSV)",
-        data=df_people_all.to_csv(index=False).encode("utf-8"),
+        data=df_people_all_disp.to_csv(index=False).encode("utf-8"),
         file_name=f"persone_{dim_label.lower()}_{len(chosen_dims)}_selezionati.csv",
         mime="text/csv",
     )
     bufp = io.BytesIO()
     with pd.ExcelWriter(bufp, engine="openpyxl") as writer:
-        df_people_all.to_excel(writer, index=False, sheet_name="PERSONE")
+        df_people_all_disp.to_excel(writer, index=False, sheet_name="PERSONE")
     st.download_button(
         "Scarica persone (Excel)",
         data=bufp.getvalue(),

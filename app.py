@@ -174,6 +174,33 @@ def simplify_qualifica(q: str, reparto: str) -> str | None:
     return str(q).strip()
 
 
+
+def _delta_sopra_sotto(val, unit="", ref_label=""):
+    """Ritorna una stringa del tipo 'X unit sopra/sotto <ref_label>' senza segno (+/-)."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    side = "sopra" if val >= 0 else "sotto"
+    v = abs(val)
+    if isinstance(v, float):
+        if v >= 100:
+            s = f"{v:.0f}"
+        elif v >= 10:
+            s = f"{v:.1f}"
+        else:
+            s = f"{v:.2f}"
+    else:
+        s = str(v)
+    unit = f" {unit}".rstrip()
+    ref = f" {ref_label}".rstrip()
+    return f"{s}{unit} {side}{ref}"
+
+def _delta_ratio_vs_1(ratio):
+    if ratio is None or (isinstance(ratio, float) and np.isnan(ratio)):
+        return ""
+    diff_pp = abs(ratio - 1.0) * 100
+    side = "sopra" if ratio >= 1.0 else "sotto"
+    return f"{diff_pp:.1f}% {side} 1.00"
+
 def build_detail_and_analisi(
     df_raw: pd.DataFrame,
     only_in_force: bool,
@@ -1204,33 +1231,6 @@ with tab3:
     ferie_fruite = float(to_num_series(df_rep["FERIE_FRUITE_2025"]).sum()) if "FERIE_FRUITE_2025" in df_rep.columns else np.nan
 
     saldo_ferie = (ferie_mat - ferie_fruite) if (not np.isnan(ferie_mat) and not np.isnan(ferie_fruite)) else np.nan
-
-def _delta_sopra_sotto(val, unit="", ref_label=""):
-    """Ritorna una stringa del tipo 'X unit sopra/sotto <ref_label>' senza segno (+/-) per evitare frecce Streamlit."""
-    if val is None or (isinstance(val, float) and np.isnan(val)):
-        return ""
-    side = "sopra" if val >= 0 else "sotto"
-    v = abs(val)
-    if isinstance(v, float):
-        # scegli formato
-        if v >= 100:
-            s = f"{v:.0f}"
-        elif v >= 10:
-            s = f"{v:.1f}"
-        else:
-            s = f"{v:.2f}"
-    else:
-        s = str(v)
-    unit = f" {unit}".rstrip()
-    ref = f" {ref_label}".rstrip()
-    return f"{s}{unit} {side}{ref}"
-
-def _delta_ratio_vs_1(ratio):
-    if ratio is None or (isinstance(ratio, float) and np.isnan(ratio)):
-        return ""
-    diff_pp = abs(ratio - 1.0) * 100
-    side = "sopra" if ratio >= 1.0 else "sotto"
-    return f"{diff_pp:.1f}% {side} 1.00"
 
     ferie_da_fruire = max(ferie_res, 0.0) if not np.isnan(ferie_res) else np.nan  # ferie residue da programmare/smaltire
     ferie_res_media = (ferie_res / teste) if (teste > 0 and not np.isnan(ferie_res)) else np.nan

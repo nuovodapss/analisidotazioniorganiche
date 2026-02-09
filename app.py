@@ -1210,9 +1210,10 @@ with tab3:
     # -------------------------
     teste = int(k_rep.get("n_operatori", 0))
     fte = float(k_rep.get("fte_tot", 0.0))
+    fte_disp = float(k_rep.get("fte_disp", np.nan))
 
-    delta_teste_fte = (teste - fte) if fte is not None else np.nan
-    ratio_teste_fte = (teste / fte) if fte > 0 else np.nan
+    gap_teste_fte = (teste - fte) if fte is not None else np.nan
+    gap_teste_fte_disp = (teste - fte_disp) if not np.isnan(fte_disp) else np.nan
 
     # Ore lavorate vs ore teoriche (ore)
     col_ore_lav = find_col(df_rep, ["ORE LAVORATE"], contains=True)
@@ -1237,22 +1238,21 @@ with tab3:
 
     # Mostra KPI principali richiesti (senza box)
     rA = st.columns(4)
-    rA[0].metric(
-        "Teste (n)",
-        f"{teste}",
-        delta=(_delta_sopra_sotto(delta_teste_fte, unit="teste", ref_label="FTE") if not np.isnan(delta_teste_fte) else ""),
-        delta_color="off",
-    )
+    rA[0].metric("Teste (n)", f"{teste}")
     rA[1].metric("FTE", f"{fte:.2f}")
     rA[2].metric(
-        "Teste/FTE",
-        f"{ratio_teste_fte:.2f}" if not np.isnan(ratio_teste_fte) else "n/d",
-        delta=(_delta_ratio_vs_1(ratio_teste_fte) if not np.isnan(ratio_teste_fte) else ""),
+        "Teste − FTE",
+        f"{gap_teste_fte:.2f}" if not np.isnan(gap_teste_fte) else "n/d",
+        delta=(
+            _delta_sopra_sotto(gap_teste_fte_disp, unit="teste", ref_label="FTE disponibili")
+            if not np.isnan(gap_teste_fte_disp)
+            else ""
+        ),
         delta_color="off",
     )
     rA[3].metric(
         "FTE disponibili",
-        f"{k_rep['fte_disp']:.2f}" if not np.isnan(k_rep.get("fte_disp", np.nan)) else "n/d",
+        f"{fte_disp:.2f}" if not np.isnan(fte_disp) else "n/d",
     )
 
     rB = st.columns(4)

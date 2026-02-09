@@ -1204,7 +1204,35 @@ with tab3:
     ferie_fruite = float(to_num_series(df_rep["FERIE_FRUITE_2025"]).sum()) if "FERIE_FRUITE_2025" in df_rep.columns else np.nan
 
     saldo_ferie = (ferie_mat - ferie_fruite) if (not np.isnan(ferie_mat) and not np.isnan(ferie_fruite)) else np.nan
-    ferie_da_fruire = max(saldo_ferie, 0.0) if not np.isnan(saldo_ferie) else np.nan
+
+def _delta_sopra_sotto(val, unit="", ref_label=""):
+    """Ritorna una stringa del tipo 'X unit sopra/sotto <ref_label>' senza segno (+/-) per evitare frecce Streamlit."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    side = "sopra" if val >= 0 else "sotto"
+    v = abs(val)
+    if isinstance(v, float):
+        # scegli formato
+        if v >= 100:
+            s = f"{v:.0f}"
+        elif v >= 10:
+            s = f"{v:.1f}"
+        else:
+            s = f"{v:.2f}"
+    else:
+        s = str(v)
+    unit = f" {unit}".rstrip()
+    ref = f" {ref_label}".rstrip()
+    return f"{s}{unit} {side}{ref}"
+
+def _delta_ratio_vs_1(ratio):
+    if ratio is None or (isinstance(ratio, float) and np.isnan(ratio)):
+        return ""
+    diff_pp = abs(ratio - 1.0) * 100
+    side = "sopra" if ratio >= 1.0 else "sotto"
+    return f"{diff_pp:.1f}% {side} 1.00"
+
+    ferie_da_fruire = max(ferie_res, 0.0) if not np.isnan(ferie_res) else np.nan  # ferie residue da programmare/smaltire
     ferie_res_media = (ferie_res / teste) if (teste > 0 and not np.isnan(ferie_res)) else np.nan
 
     # Mostra KPI principali richiesti (senza box)
@@ -1212,14 +1240,14 @@ with tab3:
     rA[0].metric(
         "Teste (n)",
         f"{teste}",
-        delta=(f"{delta_teste_fte:+.2f} vs FTE" if not np.isnan(delta_teste_fte) else ""),
+        delta=(_delta_sopra_sotto(delta_teste_fte, unit="teste", ref_label="FTE") if not np.isnan(delta_teste_fte) else ""),
         delta_color="off",
     )
     rA[1].metric("FTE", f"{fte:.2f}")
     rA[2].metric(
         "Teste/FTE",
         f"{ratio_teste_fte:.2f}" if not np.isnan(ratio_teste_fte) else "n/d",
-        delta=(f"{(ratio_teste_fte - 1) * 100:+.1f}% vs 1.00" if not np.isnan(ratio_teste_fte) else ""),
+        delta=(_delta_ratio_vs_1(ratio_teste_fte) if not np.isnan(ratio_teste_fte) else ""),
         delta_color="off",
     )
     rA[3].metric(
@@ -1232,13 +1260,13 @@ with tab3:
     rB[1].metric(
         "Ore lavorate (h)",
         f"{ore_lav:.0f}" if not np.isnan(ore_lav) else "n/d",
-        delta=(f"{ore_gap:+.0f} vs teoriche" if not np.isnan(ore_gap) else ""),
+        delta=(_delta_sopra_sotto(ore_gap, unit="h", ref_label="teoriche") if not np.isnan(ore_gap) else ""),
         delta_color="off",
     )
     rB[2].metric(
         "Copertura ore (%)",
         f"{copertura:.1f}%" if not np.isnan(copertura) else "n/d",
-        delta=(f"{(copertura - 100):+.1f} pp vs 100%" if not np.isnan(copertura) else ""),
+        delta=(_delta_sopra_sotto(copertura - 100, unit="pp", ref_label="100%") if not np.isnan(copertura) else ""),
         delta_color="off",
     )
     rB[3].metric(
@@ -1250,25 +1278,25 @@ with tab3:
     rC[0].metric(
         "Residuo ferie al 01/01/2026 (gg)",
         f"{ferie_res:.0f}" if not np.isnan(ferie_res) else "n/d",
-        delta=(f"{ferie_res:+.0f} vs 0" if not np.isnan(ferie_res) else ""),
+        delta=(f"{ferie_res:.0f} gg" if (not np.isnan(ferie_res) and ferie_res>0) else ""),
         delta_color="inverse",
     )
     rC[1].metric(
         "Residuo ferie medio (gg/op)",
         f"{ferie_res_media:.1f}" if not np.isnan(ferie_res_media) else "n/d",
-        delta=(f"{ferie_res_media:+.1f} vs 0" if not np.isnan(ferie_res_media) else ""),
+        delta=(f"{ferie_res_media:.1f} gg/op" if (not np.isnan(ferie_res_media) and ferie_res_media>0) else ""),
         delta_color="inverse",
     )
     rC[2].metric(
         "Saldo ferie 2025 (mat - fruite) (gg)",
         f"{saldo_ferie:.0f}" if not np.isnan(saldo_ferie) else "n/d",
-        delta=(f"{saldo_ferie:+.0f} vs 0" if not np.isnan(saldo_ferie) else ""),
+        delta=(_delta_sopra_sotto(saldo_ferie, unit="gg", ref_label="0") if not np.isnan(saldo_ferie) else ""),
         delta_color="inverse",
     )
     rC[3].metric(
         "Ferie da far fruire (gg)",
         f"{ferie_da_fruire:.0f}" if not np.isnan(ferie_da_fruire) else "n/d",
-        delta=(f"{ferie_da_fruire:+.0f} vs 0" if not np.isnan(ferie_da_fruire) else ""),
+        delta=(f"{ferie_da_fruire:.0f} gg da smaltire" if (not np.isnan(ferie_da_fruire) and ferie_da_fruire>0) else ""),
         delta_color="inverse",
     )
 

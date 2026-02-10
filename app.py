@@ -293,15 +293,15 @@ def build_detail_and_analisi(
     else:
         df["FTE_2026"] = df["FTE"]
 
-    # SERVIZIO: CDR_DESC fallback REPARTO
-    if c_cdr:
-        df["SERVIZIO"] = df[c_cdr].astype(str).str.strip()
-    else:
-        df["SERVIZIO"] = ""
+    # SERVIZIO: REPARTO (preferito) fallback CDR_DESC
+    df["SERVIZIO"] = ""
     if c_rep:
         rep_str = df[c_rep].astype(str).str.strip()
-        df.loc[df["SERVIZIO"].isin(["", "nan", "None"]), "SERVIZIO"] = rep_str
-        df.loc[df["SERVIZIO"].eq(""), "SERVIZIO"] = rep_str
+        df["SERVIZIO"] = rep_str
+    if c_cdr:
+        cdr_str = df[c_cdr].astype(str).str.strip()
+        df.loc[df["SERVIZIO"].isin(["", "nan", "None"]), "SERVIZIO"] = cdr_str
+        df.loc[df["SERVIZIO"].eq(""), "SERVIZIO"] = cdr_str
 
     # QUALIFICA semplificata
     rep_for_q = df[c_rep] if c_rep else pd.Series([""] * len(df), index=df.index)
@@ -541,7 +541,7 @@ def build_tabella_dotazioni(df_scope: pd.DataFrame, ore_annue_fte: float, cess_c
     df = df_scope.copy()
 
     c_matr = find_col(df, ["MATRICOLA"], contains=True)
-    service_col = "SERVIZIO" if "SERVIZIO" in df.columns else find_col(df, ["CDR_DESC", "REPARTO"], contains=True)
+    service_col = "SERVIZIO" if "SERVIZIO" in df.columns else find_col(df, ["REPARTO", "CDR_DESC"], contains=True)
     qual_col = "QUALIFICA_OUT" if "QUALIFICA_OUT" in df.columns else find_col(df, ["QUALIFICA.1", "QUALIFICA"], contains=True)
 
     if not service_col or not qual_col:
@@ -783,14 +783,13 @@ def _cdc_to_int(x):
 
 DAPSS_DEFAULT = {
     # AREA MEDICO - ONCOLOGICA
-    105: "AREA MEDICO - ONCOLOGICA", 134: "AREA MEDICO - ONCOLOGICA", 135: "AREA MEDICO - ONCOLOGICA",
-    152: "AREA MEDICO - ONCOLOGICA", 161: "AREA MEDICO - ONCOLOGICA", 162: "AREA MEDICO - ONCOLOGICA",
-    173: "AREA MEDICO - ONCOLOGICA", 175: "AREA MEDICO - ONCOLOGICA", 176: "AREA MEDICO - ONCOLOGICA",
-    189: "AREA MEDICO - ONCOLOGICA", 191: "AREA MEDICO - ONCOLOGICA", 193: "AREA MEDICO - ONCOLOGICA",
-    197: "AREA MEDICO - ONCOLOGICA", 201: "AREA MEDICO - ONCOLOGICA", 202: "AREA MEDICO - ONCOLOGICA",
-    231: "AREA MEDICO - ONCOLOGICA", 232: "AREA MEDICO - ONCOLOGICA", 233: "AREA MEDICO - ONCOLOGICA",
-    234: "AREA MEDICO - ONCOLOGICA", 236: "AREA MEDICO - ONCOLOGICA", 326: "AREA MEDICO - ONCOLOGICA",
-    324: "AREA MEDICO - ONCOLOGICA", 2700: "AREA MEDICO - ONCOLOGICA",
+    105: "AREA MEDICO - ONCOLOGICA", 107: "AREA MEDICO - ONCOLOGICA", 113: "AREA MEDICO - ONCOLOGICA", 114: "AREA MEDICO - ONCOLOGICA",
+    131: "AREA MEDICO - ONCOLOGICA", 134: "AREA MEDICO - ONCOLOGICA", 135: "AREA MEDICO - ONCOLOGICA", 152: "AREA MEDICO - ONCOLOGICA",
+    161: "AREA MEDICO - ONCOLOGICA", 162: "AREA MEDICO - ONCOLOGICA", 173: "AREA MEDICO - ONCOLOGICA", 175: "AREA MEDICO - ONCOLOGICA",
+    176: "AREA MEDICO - ONCOLOGICA", 189: "AREA MEDICO - ONCOLOGICA", 191: "AREA MEDICO - ONCOLOGICA", 193: "AREA MEDICO - ONCOLOGICA",
+    197: "AREA MEDICO - ONCOLOGICA", 201: "AREA MEDICO - ONCOLOGICA", 202: "AREA MEDICO - ONCOLOGICA", 231: "AREA MEDICO - ONCOLOGICA",
+    232: "AREA MEDICO - ONCOLOGICA", 233: "AREA MEDICO - ONCOLOGICA", 234: "AREA MEDICO - ONCOLOGICA", 236: "AREA MEDICO - ONCOLOGICA",
+    324: "AREA MEDICO - ONCOLOGICA", 326: "AREA MEDICO - ONCOLOGICA", 2700: "AREA MEDICO - ONCOLOGICA",
 
     # AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO
     120: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO", 121: "AREA GESTIONE RISORSE INFERMIERISTICHE E DI SUPPORTO OGLIO PO",

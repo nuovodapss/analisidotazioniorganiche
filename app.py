@@ -1571,7 +1571,6 @@ with tab2:
                 fig_box.update_traces(
                     fillcolor="red",
                     line=dict(color="black", width=2),
-                    medianline=dict(color="black", width=2),
                     marker=dict(color="red", line=dict(color="black", width=1)),
                 )
                 fig_box.update_layout(xaxis_tickangle=45, yaxis_title="%")

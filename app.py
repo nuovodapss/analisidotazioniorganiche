@@ -1,4 +1,4 @@
-#app.py
+# app.py
 import io
 import re
 import datetime as dt
@@ -91,7 +91,7 @@ def style_red_black(fig):
 
 
 def fmt_it(v, decimals=0, suffix=""):
-    """Formato numeri in stile IT (migliaia '.', decimali ',')."""
+    """Formato numeri con virgola decimale, senza separatore delle migliaia."""
     if v is None:
         return "n/d"
     try:
@@ -100,17 +100,19 @@ def fmt_it(v, decimals=0, suffix=""):
         return "n/d"
     if np.isnan(v):
         return "n/d"
+
     if decimals <= 0:
-        s = f"{v:,.0f}"
+        s = fmt_it(v, 0)
     else:
-        s = f"{v:,.{decimals}f}"
-    # US -> IT
-    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+        s = f"{v:.{decimals}f}"
+
+    # separatore decimale IT
+    s = s.replace(".", ",")
     return f"{s}{suffix}"
 
 
 def fmt_it_signed(v, decimals=2, suffix=""):
-    """Formato IT con segno (+/-), utile per i delta delle metriche."""
+    """Formato IT con segno (+/-), senza separatore delle migliaia."""
     if v is None:
         return None
     try:
@@ -119,13 +121,48 @@ def fmt_it_signed(v, decimals=2, suffix=""):
         return None
     if np.isnan(v):
         return None
+
     if decimals <= 0:
-        s = f"{v:+,.0f}"
+        s = f"{v:+.0f}"
     else:
-        s = f"{v:+,.{decimals}f}"
-    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+        s = f"{v:+.{decimals}f}"
+
+    s = s.replace(".", ",")
     return f"{s}{suffix}"
 
+
+def fmt_df_it(df: pd.DataFrame, decimals_map=None) -> pd.DataFrame:
+    """Ritorna una copia del DF con numeri formattati (virgola decimale, nessun separatore migliaia)."""
+    decimals_map = decimals_map or {}
+    out = df.copy()
+
+    for c in out.columns:
+        if pd.api.types.is_numeric_dtype(out[c]):
+            cn = norm(c)
+            dec = decimals_map.get(c, None)
+
+            if dec is None:
+                if "copertura" in cn:
+                    dec = 1
+                elif "assenteismo" in cn or "%" in c:
+                    dec = 2
+                elif "fte" in cn:
+                    dec = 2
+                elif "assenze" in cn or "straord" in cn or "fest" in cn:
+                    dec = 2
+                elif "ore" in cn or "(h" in cn:
+                    dec = 0
+                elif "ferie" in cn:
+                    dec = 1 if "medio" in cn else 0
+                else:
+                    s = out[c].dropna()
+                    if not s.empty and np.any(np.abs(s.astype(float) - np.round(s.astype(float))) > 1e-6):
+                        dec = 2
+                    else:
+                        dec = 0
+
+            out[c] = out[c].apply(lambda v: "" if pd.isna(v) else fmt_it(v, dec))
+    return out
 
 def delta_pill(delta, decimals=2):
     """Ritorna una 'pill' HTML (rosso/verde) con freccia e valore assoluto con N decimali."""
@@ -244,11 +281,11 @@ def _delta_sopra_sotto(val, unit="", ref_label=""):
     v = abs(val)
     if isinstance(v, float):
         if v >= 100:
-            s = f"{v:.0f}"
+            s = fmt_it(v, 0)
         elif v >= 10:
-            s = f"{v:.1f}"
+            s = fmt_it(v, 1)
         else:
-            s = f"{v:.2f}"
+            s = fmt_it(v, 2)
     else:
         s = str(v)
     unit = f" {unit}".rstrip()
@@ -260,7 +297,7 @@ def _delta_ratio_vs_1(ratio):
         return ""
     diff_pp = abs(ratio - 1.0) * 100
     side = "sopra" if ratio >= 1.0 else "sotto"
-    return f"{diff_pp:.1f}% {side} 1.00"
+    return f"{fmt_it(diff_pp, 1, '%')} {side} 1,00"
 
 def build_detail_and_analisi(
     df_raw: pd.DataFrame,
@@ -822,7 +859,7 @@ with st.expander("🔎 Debug lettura Excel"):
         st.warning(f"Colonne essenziali non trovate (controlla header): {missing}")
     else:
         st.success("Tutte le colonne essenziali sono presenti.")
-    st.dataframe(df_raw.head(15), use_container_width=True)
+    st.dataframe(fmt_df_it(df_raw.head(15)), use_container_width=True)
 
 
 # ---- Filtri in sidebar ----
@@ -1082,14 +1119,14 @@ st.subheader("KPI (aggiornati dai filtri)")
 with st.container(border=True):
     r1 = st.columns(4)
     r1[0].metric("N Operatori", f"{k_global['n_operatori']}")
-    r1[1].metric("FTE totali", f"{k_global['fte_tot']:.2f}")
-    r1[2].metric("Assenteismo % (su 1470h/FTE)", f"{k_global['ass_pct']:.2f}%" if not np.isnan(k_global["ass_pct"]) else "n/d")
-    r1[3].metric("FTE mediamente assenti", f"{k_global['fte_assenti']:.2f}" if not np.isnan(k_global["fte_assenti"]) else "n/d")
+    r1[1].metric("FTE totali", fmt_it(k_global['fte_tot'], 2))
+    r1[2].metric("Assenteismo % (su 1470h/FTE)", fmt_it(k_global['ass_pct'], 2, "%") if not np.isnan(k_global["ass_pct"]) else "n/d")
+    r1[3].metric("FTE mediamente assenti", fmt_it(k_global['fte_assenti'], 2) if not np.isnan(k_global["fte_assenti"]) else "n/d")
 
     r2 = st.columns(3)
-    r2[0].metric("FTE disponibili", f"{k_global['fte_disp']:.2f}" if not np.isnan(k_global["fte_disp"]) else "n/d")
-    r2[1].metric("Straordinario (ore/FTE)", f"{k_global['st_x_fte']:.2f}" if not np.isnan(k_global["st_x_fte"]) else "n/d")
-    r2[2].metric("Residuo ferie medio (gg/op)", f"{k_global['res_giorni_media']:.2f}" if not np.isnan(k_global["res_giorni_media"]) else "n/d")
+    r2[0].metric("FTE disponibili", fmt_it(k_global['fte_disp'], 2) if not np.isnan(k_global["fte_disp"]) else "n/d")
+    r2[1].metric("Straordinario (ore/FTE)", fmt_it(k_global['st_x_fte'], 2) if not np.isnan(k_global["st_x_fte"]) else "n/d")
+    r2[2].metric("Residuo ferie medio (gg/op)", fmt_it(k_global['res_giorni_media'], 2) if not np.isnan(k_global["res_giorni_media"]) else "n/d")
 
 st.divider()
 
@@ -1113,7 +1150,7 @@ with tab1:
     num_cols = analisi_show.select_dtypes(include=[np.number]).columns
     analisi_show[num_cols] = analisi_show[num_cols].round(2)
 
-    st.dataframe(analisi_show, use_container_width=True, height=640)
+    st.dataframe(fmt_df_it(analisi_show), use_container_width=True, height=640)
 
     st.download_button(
         "Scarica tabella (CSV)",
@@ -1266,6 +1303,19 @@ with tab2:
                 title=f"Assenze per blocco (ore) – Top {top_n} {dim_label}"
             )
             fig_abs.update_layout(xaxis_tickangle=45, yaxis_title="ore")
+            # Stile richiesto: rosso/rosino con bordo nero
+            _colors = {
+                "MAL_104_ECC_ORE": "rgb(220, 53, 69)",        # rosso
+                "ASP_GRAV_PUER_DIST_ORE": "rgb(255, 182, 193)" # rosino
+            }
+            for _tr in fig_abs.data:
+                try:
+                    _tr.marker.line.color = "black"
+                    _tr.marker.line.width = 1
+                    if _tr.name in _colors:
+                        _tr.marker.color = _colors[_tr.name]
+                except Exception:
+                    pass
             st.plotly_chart(fig_abs, use_container_width=True)
         else:
             st.info("Colonne per blocchi assenza non disponibili.")
@@ -1328,22 +1378,30 @@ with tab2:
                 df_norm,
                 aspect="auto",
                 title=f"Matrice KPI normalizzata (0–1) – Top {top_n} {dim_label}",
+                color_continuous_scale=[[0, "white"], [1, "red"]],
+            )
+            # Bordi neri: usa gap tra celle e sfondo nero
+            fig_h.update_traces(xgap=2, ygap=2)
+            fig_h.update_layout(
+                plot_bgcolor="black",
+                paper_bgcolor="black",
+                font=dict(color="white"),
+                coloraxis_showscale=True,
             )
             st.plotly_chart(fig_h, use_container_width=True)
 
             with st.expander("Tabella valori (non normalizzati)", expanded=False):
-                st.dataframe(df_h.reset_index(), use_container_width=True, height=420)
+                st.dataframe(fmt_df_it(df_h.reset_index()), use_container_width=True, height=420)
 
 
 
     st.divider()
     st.subheader("Analisi avanzate")
 
-    tQ, tP, tBox, tW = st.tabs([
+    tQ, tP, tBox = st.tabs([
         "Quadranti (outlier)",
         "Pareto assenze",
         "Boxplot assenteismo individuale",
-        "Waterfall copertura ore",
     ])
 
     # --- Quadranti (scatter con linee di riferimento) ---
@@ -1508,92 +1566,15 @@ with tab2:
                     hover_data=["PERSONA", "FTE"] if "PERSONA" in df_box.columns else ["FTE"],
                     title=f"Assenteismo individuale (%) – Top {box_n} {dim_label} (per FTE)",
                 )
-                fig_box.update_traces(marker=dict(line=dict(color="black", width=1)))
+                # Stile richiesto: box ROSSI, bordo/scatola/baffi NERI
+                fig_box.update_traces(
+                    fillcolor="red",
+                    line=dict(color="black", width=2),
+                    medianline=dict(color="black", width=2),
+                    marker=dict(color="red", line=dict(color="black", width=1)),
+                )
                 fig_box.update_layout(xaxis_tickangle=45, yaxis_title="%")
                 st.plotly_chart(fig_box, use_container_width=True)
-
-    # --- Waterfall: ore teoriche → assenze → straordinari (+ confronto ore lavorate se disponibili) ---
-    with tW:
-        st.caption("Narrativa della copertura ore: teoriche → impatto assenze → compensazione con straordinari/festivi.")
-
-        c_ore_lav = find_col(df_scope, ["ORE LAVORATE"], contains=True)
-        c_ore_teo_file = find_col(df_scope, ["ORE TEORICHE"], contains=True)
-
-        # menu UUOO: totale + top per FTE
-        wf_opts = ["TOTALE"]
-        wf_opts += df_dim.sort_values("FTE", ascending=False).head(min(30, len(df_dim)))[dim_label].astype(str).tolist()
-        wf_sel = st.selectbox("Seleziona UUOO", wf_opts, index=0, key="wf_sel")
-
-        def _pick_vals(sel):
-            if sel == "TOTALE":
-                fte_tot = float(df_dim["FTE"].sum())
-                ore_teo = fte_tot * ore_annue_fte
-                abs_ore = float(df_dim["ASSENZE_ORE"].sum())
-                st_ore = float(df_dim["STRAORD_TOT_ORE"].sum())
-                ore_lav = float(to_num_series(df_scope[c_ore_lav]).sum()) if c_ore_lav else np.nan
-                if c_ore_teo_file:
-                    teo_file = float(to_num_series(df_scope[c_ore_teo_file]).sum())
-                    if teo_file > 0:
-                        ore_teo = teo_file
-                return ore_teo, abs_ore, st_ore, ore_lav
-
-            row = df_dim[df_dim[dim_label].astype(str) == str(sel)]
-            if row.empty:
-                return np.nan, np.nan, np.nan, np.nan
-            row = row.iloc[0]
-            ore_teo = float(row.get("ORE_TEORICHE", np.nan))
-            abs_ore = float(row.get("ASSENZE_ORE", np.nan))
-            st_ore = float(row.get("STRAORD_TOT_ORE", np.nan))
-
-            ore_lav = np.nan
-            if c_ore_lav:
-                ore_lav = float(to_num_series(df_scope.loc[df_scope[dim_col].astype(str) == str(sel), c_ore_lav]).sum())
-
-            if c_ore_teo_file:
-                teo_file = float(to_num_series(df_scope.loc[df_scope[dim_col].astype(str) == str(sel), c_ore_teo_file]).sum())
-                if teo_file > 0:
-                    ore_teo = teo_file
-
-            return ore_teo, abs_ore, st_ore, ore_lav
-
-        ore_teo, abs_ore, st_ore, ore_lav = _pick_vals(wf_sel)
-
-        if np.isnan(ore_teo) or ore_teo <= 0:
-            st.info("Ore teoriche non disponibili per la waterfall.")
-        else:
-            ore_stimata = ore_teo - abs_ore + st_ore
-
-            x = ["Ore teoriche", "Assenze (ore)", "Straordinari+Festivi", "Ore stimate"]
-            y = [ore_teo, -abs_ore, st_ore, ore_stimata]
-            measure = ["absolute", "relative", "relative", "total"]
-
-            if not np.isnan(ore_lav):
-                x.append("Ore lavorate (file)")
-                y.append(ore_lav)
-                measure.append("total")
-
-            fig_w = go.Figure(go.Waterfall(
-                x=x,
-                y=y,
-                measure=measure,
-                connector={"line": {"dash": "dot"}},
-            ))
-            fig_w.update_layout(
-                title=f"Waterfall copertura ore – {wf_sel}",
-                yaxis_title="ore",
-                showlegend=False,
-                margin=dict(t=60),
-            )
-            st.plotly_chart(fig_w, use_container_width=True)
-
-            # quick numbers
-            cW1, cW2, cW3, cW4 = st.columns(4)
-            cW1.metric("Ore teoriche", fmt_it(ore_teo, 0))
-            cW2.metric("Assenze (ore)", fmt_it(abs_ore, 0))
-            cW3.metric("Straordinari+Festivi (ore)", fmt_it(st_ore, 0))
-            cW4.metric("Ore stimate", fmt_it(ore_stimata, 0))
-
-
 # =========================
 # TAB 3: Dettaglio reparto + persone
 # =========================
@@ -1674,12 +1655,12 @@ with tab3:
             "Teste − FTE",
             fmt_it(gap_fte_teste, 2),
         )
-        rA[2].markdown(delta_pill(gap_fte_disp_vs_teste, 2), unsafe_allow_html=True)
+        rA[2].markdown(delta_pill(gap_fte_teste, 2), unsafe_allow_html=True)
         rA[3].metric(
             "FTE disponibili",
             fmt_it(fte_disp, 2),
         )
-        rA[3].markdown(delta_pill(delta_fte_disp, 2), unsafe_allow_html=True)
+        rA[3].markdown(delta_pill(gap_fte_disp_vs_teste, 2), unsafe_allow_html=True)
 
         rB = st.columns(4)
         rB[0].metric("Ore teoriche (h)", fmt_it(ore_teo, 0))
@@ -1827,7 +1808,7 @@ with tab3:
 
         df_show = df_filtered.sort_values(sort_by, ascending=False).head(top_people).copy()
         df_show_disp = pd.concat([df_show, df_tot_row], ignore_index=True).rename(columns=people_col_labels)
-        st.dataframe(df_show_disp, use_container_width=True, height=520)
+        st.dataframe(fmt_df_it(df_show_disp), use_container_width=True, height=520)
 
         with st.expander("Download persone", expanded=False):
             df_people_all_disp = pd.concat([df_people, df_tot_row], ignore_index=True).rename(columns=people_col_labels)

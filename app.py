@@ -101,8 +101,9 @@ def fmt_it(v, decimals=0, suffix=""):
     if np.isnan(v):
         return "n/d"
 
+    # IMPORTANT: niente separatore migliaia (no "," o "_"), solo arrotondamento.
     if decimals <= 0:
-        s = fmt_it(v, 0)
+        s = f"{v:.0f}"
     else:
         s = f"{v:.{decimals}f}"
 

@@ -1,4 +1,4 @@
-# app.py
+#app.py
 import io
 import re
 import datetime as dt
@@ -107,6 +107,47 @@ def fmt_it(v, decimals=0, suffix=""):
     # US -> IT
     s = s.replace(",", "X").replace(".", ",").replace("X", ".")
     return f"{s}{suffix}"
+
+
+def fmt_it_signed(v, decimals=2, suffix=""):
+    """Formato IT con segno (+/-), utile per i delta delle metriche."""
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except Exception:
+        return None
+    if np.isnan(v):
+        return None
+    if decimals <= 0:
+        s = f"{v:+,.0f}"
+    else:
+        s = f"{v:+,.{decimals}f}"
+    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{s}{suffix}"
+
+
+def delta_pill(delta, decimals=2):
+    """Ritorna una 'pill' HTML (rosso/verde) con freccia e valore assoluto con N decimali."""
+    if delta is None:
+        return ""
+    try:
+        delta = float(delta)
+    except Exception:
+        return ""
+    if np.isnan(delta):
+        return ""
+
+    is_pos = delta > 0
+    is_neg = delta < 0
+    arrow = "↑" if is_pos else ("↓" if is_neg else "→")
+
+    # colori in stile Bootstrap-ish, leggibili su tema scuro
+    fg = "rgb(25, 135, 84)" if is_pos else ("rgb(220, 53, 69)" if is_neg else "rgb(108, 117, 125)")
+    bg = "rgba(25, 135, 84, 0.25)" if is_pos else ("rgba(220, 53, 69, 0.25)" if is_neg else "rgba(108, 117, 125, 0.25)")
+
+    txt = fmt_it(abs(delta), decimals)
+    return f'<span style="display:inline-block;padding:0.20rem 0.60rem;border-radius:999px;font-weight:600;font-size:0.85rem;background:{bg};color:{fg};">{arrow} {txt}</span>'
 
 
 # =========================
@@ -635,6 +676,8 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float):
     agg_dict = {
         "FTE": ("FTE", "sum"),
         "ASSENZE_ORE": ("ASSENZE_TOT_ORE", "sum"),
+        "MAL_104_ECC_ORE": ("MAL_104_ECC_ORE", "sum"),
+        "ASP_GRAV_PUER_DIST_ORE": ("ASP_GRAV_PUER_DIST_ORE", "sum"),
         # FERIE: sempre in giorni
         "FERIE_RES_GIORNI": ("FERIE_RES_0101", "sum"),
         "FERIE_MAT_GIORNI": ("FERIE_MAT_2025", "sum"),
@@ -1113,6 +1156,8 @@ with tab2:
         "OPERATORI": (c_matr, "nunique") if c_matr and c_matr in df_scope.columns else ("QUALIFICA_OUT", "size"),
         "FTE": ("FTE", "sum"),
         "ASSENZE_ORE": ("ASSENZE_TOT_ORE", "sum"),
+        "MAL_104_ECC_ORE": ("MAL_104_ECC_ORE", "sum"),
+        "ASP_GRAV_PUER_DIST_ORE": ("ASP_GRAV_PUER_DIST_ORE", "sum"),
         "FERIE_RES_GIORNI": ("FERIE_RES_0101", "sum"),
         "ST_REC": ("STRAORD_REC", "sum"),
         "ST_PD": ("STRAORD_PD", "sum"),
@@ -1197,6 +1242,357 @@ with tab2:
     else:
         st.info("Causali non disponibili.")
 
+    st.divider()
+    st.subheader("Altri grafici")
+
+    tA, tB, tC = st.tabs([
+        f"Assenze per blocco ({dim_label})",
+        "Composizione FTE (treemap)",
+        "Matrice KPI"
+    ])
+
+    # --- Assenze per blocco (stacked) ---
+    with tA:
+        if "MAL_104_ECC_ORE" in df_dim.columns and "ASP_GRAV_PUER_DIST_ORE" in df_dim.columns:
+            df_abs = df_dim.copy()
+            df_abs["ASSENZE_TOT_BLOCCHI"] = df_abs["MAL_104_ECC_ORE"] + df_abs["ASP_GRAV_PUER_DIST_ORE"]
+            df_abs_top = df_abs.sort_values("ASSENZE_TOT_BLOCCHI", ascending=False).head(top_n)
+
+            fig_abs = px.bar(
+                df_abs_top,
+                x=dim_label,
+                y=["MAL_104_ECC_ORE", "ASP_GRAV_PUER_DIST_ORE"],
+                barmode="stack",
+                title=f"Assenze per blocco (ore) – Top {top_n} {dim_label}"
+            )
+            fig_abs.update_layout(xaxis_tickangle=45, yaxis_title="ore")
+            st.plotly_chart(fig_abs, use_container_width=True)
+        else:
+            st.info("Colonne per blocchi assenza non disponibili.")
+
+    # --- Treemap: composizione FTE per reparto/servizio e qualifica ---
+    with tB:
+        if "FTE" in df_scope.columns and "QUALIFICA_OUT" in df_scope.columns:
+            df_tm = (
+                df_scope.groupby([dim_col, "QUALIFICA_OUT"], dropna=False)
+                .agg(FTE=("FTE", "sum"))
+                .reset_index()
+                .rename(columns={dim_col: dim_label})
+            )
+            df_tm = df_tm[df_tm["FTE"] > 0]
+
+            if df_tm.empty:
+                st.info("Nessun dato FTE disponibile per la treemap.")
+            else:
+                fig_tm = px.treemap(
+                    df_tm,
+                    path=[dim_label, "QUALIFICA_OUT"],
+                    values="FTE",
+                    title=f"Composizione FTE per {dim_label} e qualifica"
+                )
+                st.plotly_chart(fig_tm, use_container_width=True)
+        else:
+            st.info("FTE/Qualifica non disponibili per la treemap.")
+
+    # --- Heatmap KPI (normalizzata 0-1 per confronto rapido) ---
+    with tC:
+        metric_cols = {
+            "Assenteismo %": "ASSENTEISMO_%",
+            "Straord (h/FTE)": "STRAORD_ORE_X_FTE",
+            "Ferie res (gg/testa)": "FERIE_RES_GIORNI_X_TESTA",
+            "FTE persi assenze": "FTE_PERSI_ASSENZE",
+            "FTE": "FTE",
+            "Operatori": "OPERATORI",
+        }
+        sel = st.multiselect(
+            "Metriche da visualizzare",
+            list(metric_cols.keys()),
+            default=["Assenteismo %", "Straord (h/FTE)", "Ferie res (gg/testa)", "FTE persi assenze"],
+            key="hm_sel",
+        )
+
+        if not sel:
+            st.info("Seleziona almeno una metrica.")
+        else:
+            cols = [metric_cols[s] for s in sel]
+            df_h = df_dim[[dim_label] + cols].copy().set_index(dim_label)
+
+            # mantieni i top_n (per FTE se presente, altrimenti per prima metrica)
+            sort_ref = "FTE" if "FTE" in df_h.columns else cols[0]
+            df_h = df_h.sort_values(sort_ref, ascending=False).head(top_n)
+
+            den = (df_h.max() - df_h.min()).replace(0, np.nan)
+            df_norm = (df_h - df_h.min()) / den
+
+            fig_h = px.imshow(
+                df_norm,
+                aspect="auto",
+                title=f"Matrice KPI normalizzata (0–1) – Top {top_n} {dim_label}",
+            )
+            st.plotly_chart(fig_h, use_container_width=True)
+
+            with st.expander("Tabella valori (non normalizzati)", expanded=False):
+                st.dataframe(df_h.reset_index(), use_container_width=True, height=420)
+
+
+
+    st.divider()
+    st.subheader("Analisi avanzate")
+
+    tQ, tP, tBox, tW = st.tabs([
+        "Quadranti (outlier)",
+        "Pareto assenze",
+        "Boxplot assenteismo individuale",
+        "Waterfall copertura ore",
+    ])
+
+    # --- Quadranti (scatter con linee di riferimento) ---
+    with tQ:
+        st.caption("Scatter con linee di riferimento (mediana o target) per individuare rapidamente le UUOO in area critica.")
+
+        q_opts = {
+            "Assenteismo %": "ASSENTEISMO_%",
+            "Straordinario (h/FTE)": "STRAORD_ORE_X_FTE",
+            "Ferie residue (gg/testa)": "FERIE_RES_GIORNI_X_TESTA",
+            "FTE persi per assenze": "FTE_PERSI_ASSENZE",
+        }
+
+        q1, q2, q3 = st.columns([2, 2, 2])
+        qx = q1.selectbox("Asse X (quadranti)", list(q_opts.keys()), index=0, key="q_x")
+        qy = q2.selectbox("Asse Y (quadranti)", list(q_opts.keys()), index=1, key="q_y")
+        cut_mode = q3.radio("Riferimento", ["Mediana", "Target"], horizontal=True, key="q_cutmode")
+
+        df_q = df_dim.dropna(subset=[q_opts[qx], q_opts[qy]]).copy()
+        if df_q.empty:
+            st.info("Dati insufficienti per il grafico quadranti (mancano valori sulle metriche selezionate).")
+        else:
+            xcol = q_opts[qx]
+            ycol = q_opts[qy]
+            x_med = float(df_q[xcol].median())
+            y_med = float(df_q[ycol].median())
+
+            if cut_mode == "Target":
+                t1, t2 = st.columns(2)
+                x_cut = t1.number_input("Target X", value=x_med, step=0.1, key="q_x_target")
+                y_cut = t2.number_input("Target Y", value=y_med, step=0.1, key="q_y_target")
+            else:
+                x_cut, y_cut = x_med, y_med
+
+            def quad(row):
+                hx = row[xcol] >= x_cut
+                hy = row[ycol] >= y_cut
+                if hx and hy:
+                    return "Alto X / Alto Y"
+                if hx and not hy:
+                    return "Alto X / Basso Y"
+                if (not hx) and hy:
+                    return "Basso X / Alto Y"
+                return "Basso X / Basso Y"
+
+            df_q["QUADRANTE"] = df_q.apply(quad, axis=1)
+
+            fig_q = px.scatter(
+                df_q,
+                x=xcol,
+                y=ycol,
+                color="QUADRANTE",
+                size="FTE",
+                hover_name=dim_label,
+                title=f"Quadranti: {qy} vs {qx} (linee: {cut_mode.lower()})",
+            )
+            fig_q.update_traces(marker=dict(line=dict(color="black", width=1)))
+            fig_q.add_shape(type="line", x0=x_cut, x1=x_cut, y0=df_q[ycol].min(), y1=df_q[ycol].max(), line=dict(dash="dash"))
+            fig_q.add_shape(type="line", x0=df_q[xcol].min(), x1=df_q[xcol].max(), y0=y_cut, y1=y_cut, line=dict(dash="dash"))
+
+            st.plotly_chart(fig_q, use_container_width=True)
+
+            # mini riepilogo
+            qsum = df_q["QUADRANTE"].value_counts().reindex([
+                "Alto X / Alto Y",
+                "Alto X / Basso Y",
+                "Basso X / Alto Y",
+                "Basso X / Basso Y",
+            ]).fillna(0).astype(int)
+            st.caption(
+                f"Conteggi per quadrante: "
+                f"**Alto/Alto {qsum.iloc[0]}**, Alto/Basso {qsum.iloc[1]}, Basso/Alto {qsum.iloc[2]}, Basso/Basso {qsum.iloc[3]}."
+            )
+
+    # --- Pareto cumulativo assenze ---
+    with tP:
+        st.caption("Distribuzione cumulativa delle ore di assenza: evidenzia quante UUOO spiegano la quota maggiore del totale.")
+
+        df_p = df_dim[[dim_label, "ASSENZE_ORE"]].copy()
+        df_p = df_p.sort_values("ASSENZE_ORE", ascending=False)
+        tot_abs = float(df_p["ASSENZE_ORE"].sum())
+
+        if tot_abs <= 0:
+            st.info("Assenze totali pari a zero: Pareto non disponibile.")
+        else:
+            pareto_n = st.slider(f"UUOO mostrate nel Pareto", min_value=5, max_value=60, value=min(top_n, 25), step=5, key="pareto_n")
+            df_head = df_p.head(pareto_n).copy()
+            other = float(df_p.iloc[pareto_n:]["ASSENZE_ORE"].sum())
+            if other > 0:
+                df_head = pd.concat([df_head, pd.DataFrame({dim_label: ["Altri"], "ASSENZE_ORE": [other]})], ignore_index=True)
+
+            df_head["CUM_ABS"] = df_head["ASSENZE_ORE"].cumsum()
+            df_head["CUM_PCT"] = df_head["CUM_ABS"] / tot_abs * 100
+
+            fig_p = go.Figure()
+            fig_p.add_trace(go.Bar(
+                x=df_head[dim_label],
+                y=df_head["ASSENZE_ORE"],
+                name="Assenze (ore)",
+                marker=dict(color="red", line=dict(color="black", width=1)),
+            ))
+            fig_p.add_trace(go.Scatter(
+                x=df_head[dim_label],
+                y=df_head["CUM_PCT"],
+                name="Cumulata (%)",
+                mode="lines+markers",
+                yaxis="y2",
+            ))
+            fig_p.update_layout(
+                title=f"Pareto assenze (ore) – Top {pareto_n} {dim_label} (+ Altri)",
+                xaxis=dict(tickangle=45),
+                yaxis=dict(title="Ore"),
+                yaxis2=dict(title="Cumulata (%)", overlaying="y", side="right", range=[0, 100]),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                margin=dict(t=60),
+            )
+            st.plotly_chart(fig_p, use_container_width=True)
+
+    # --- Boxplot assenteismo individuale per reparto/servizio ---
+    with tBox:
+        st.caption("Distribuzione dell'assenteismo individuale (percentuale) per UUOO: distingue problemi diffusi vs pochi outlier.")
+
+        df_people_all = build_people_table(df_scope, ore_annue_fte=ore_annue_fte)
+        if df_people_all.empty or "ASSENTEISMO_%" not in df_people_all.columns:
+            st.info("Non riesco a calcolare l'assenteismo individuale (mancano dati persona).")
+        else:
+            # assegna UUOO a ciascuna persona (prima occorrenza)
+            if c_matr and c_matr in df_people_all.columns and c_matr in df_scope.columns:
+                map_dim = df_scope.groupby(c_matr, dropna=False)[dim_col].first().reset_index()
+                df_people_all = df_people_all.merge(map_dim, on=c_matr, how="left")
+            else:
+                c_cogn = find_col(df_scope, ["COGNOME"], contains=True)
+                c_nome = find_col(df_scope, ["NOME"], contains=True)
+                if c_cogn and c_nome and c_cogn in df_people_all.columns and c_nome in df_people_all.columns:
+                    map_dim = df_scope.groupby([c_cogn, c_nome], dropna=False)[dim_col].first().reset_index()
+                    df_people_all = df_people_all.merge(map_dim, left_on=[c_cogn, c_nome], right_on=[c_cogn, c_nome], how="left")
+                else:
+                    df_people_all[dim_col] = "N/D"
+
+            df_people_all = df_people_all.rename(columns={dim_col: dim_label})
+            df_people_all[dim_label] = df_people_all[dim_label].astype(str)
+
+            # limita categorie per leggibilità
+            box_n = st.slider("UUOO incluse nel boxplot", min_value=5, max_value=40, value=min(15, max(5, top_n)), step=5, key="box_n")
+            top_cats = (
+                df_people_all.groupby(dim_label, dropna=False)
+                .agg(FTE=("FTE", "sum"))
+                .sort_values("FTE", ascending=False)
+                .head(box_n)
+                .index.tolist()
+            )
+            df_box = df_people_all[df_people_all[dim_label].isin(top_cats)].copy()
+
+            if df_box.empty:
+                st.info("Nessun dato disponibile per il boxplot con i filtri attuali.")
+            else:
+                fig_box = px.box(
+                    df_box,
+                    x=dim_label,
+                    y="ASSENTEISMO_%",
+                    points="outliers",
+                    hover_data=["PERSONA", "FTE"] if "PERSONA" in df_box.columns else ["FTE"],
+                    title=f"Assenteismo individuale (%) – Top {box_n} {dim_label} (per FTE)",
+                )
+                fig_box.update_traces(marker=dict(line=dict(color="black", width=1)))
+                fig_box.update_layout(xaxis_tickangle=45, yaxis_title="%")
+                st.plotly_chart(fig_box, use_container_width=True)
+
+    # --- Waterfall: ore teoriche → assenze → straordinari (+ confronto ore lavorate se disponibili) ---
+    with tW:
+        st.caption("Narrativa della copertura ore: teoriche → impatto assenze → compensazione con straordinari/festivi.")
+
+        c_ore_lav = find_col(df_scope, ["ORE LAVORATE"], contains=True)
+        c_ore_teo_file = find_col(df_scope, ["ORE TEORICHE"], contains=True)
+
+        # menu UUOO: totale + top per FTE
+        wf_opts = ["TOTALE"]
+        wf_opts += df_dim.sort_values("FTE", ascending=False).head(min(30, len(df_dim)))[dim_label].astype(str).tolist()
+        wf_sel = st.selectbox("Seleziona UUOO", wf_opts, index=0, key="wf_sel")
+
+        def _pick_vals(sel):
+            if sel == "TOTALE":
+                fte_tot = float(df_dim["FTE"].sum())
+                ore_teo = fte_tot * ore_annue_fte
+                abs_ore = float(df_dim["ASSENZE_ORE"].sum())
+                st_ore = float(df_dim["STRAORD_TOT_ORE"].sum())
+                ore_lav = float(to_num_series(df_scope[c_ore_lav]).sum()) if c_ore_lav else np.nan
+                if c_ore_teo_file:
+                    teo_file = float(to_num_series(df_scope[c_ore_teo_file]).sum())
+                    if teo_file > 0:
+                        ore_teo = teo_file
+                return ore_teo, abs_ore, st_ore, ore_lav
+
+            row = df_dim[df_dim[dim_label].astype(str) == str(sel)]
+            if row.empty:
+                return np.nan, np.nan, np.nan, np.nan
+            row = row.iloc[0]
+            ore_teo = float(row.get("ORE_TEORICHE", np.nan))
+            abs_ore = float(row.get("ASSENZE_ORE", np.nan))
+            st_ore = float(row.get("STRAORD_TOT_ORE", np.nan))
+
+            ore_lav = np.nan
+            if c_ore_lav:
+                ore_lav = float(to_num_series(df_scope.loc[df_scope[dim_col].astype(str) == str(sel), c_ore_lav]).sum())
+
+            if c_ore_teo_file:
+                teo_file = float(to_num_series(df_scope.loc[df_scope[dim_col].astype(str) == str(sel), c_ore_teo_file]).sum())
+                if teo_file > 0:
+                    ore_teo = teo_file
+
+            return ore_teo, abs_ore, st_ore, ore_lav
+
+        ore_teo, abs_ore, st_ore, ore_lav = _pick_vals(wf_sel)
+
+        if np.isnan(ore_teo) or ore_teo <= 0:
+            st.info("Ore teoriche non disponibili per la waterfall.")
+        else:
+            ore_stimata = ore_teo - abs_ore + st_ore
+
+            x = ["Ore teoriche", "Assenze (ore)", "Straordinari+Festivi", "Ore stimate"]
+            y = [ore_teo, -abs_ore, st_ore, ore_stimata]
+            measure = ["absolute", "relative", "relative", "total"]
+
+            if not np.isnan(ore_lav):
+                x.append("Ore lavorate (file)")
+                y.append(ore_lav)
+                measure.append("total")
+
+            fig_w = go.Figure(go.Waterfall(
+                x=x,
+                y=y,
+                measure=measure,
+                connector={"line": {"dash": "dot"}},
+            ))
+            fig_w.update_layout(
+                title=f"Waterfall copertura ore – {wf_sel}",
+                yaxis_title="ore",
+                showlegend=False,
+                margin=dict(t=60),
+            )
+            st.plotly_chart(fig_w, use_container_width=True)
+
+            # quick numbers
+            cW1, cW2, cW3, cW4 = st.columns(4)
+            cW1.metric("Ore teoriche", fmt_it(ore_teo, 0))
+            cW2.metric("Assenze (ore)", fmt_it(abs_ore, 0))
+            cW3.metric("Straordinari+Festivi (ore)", fmt_it(st_ore, 0))
+            cW4.metric("Ore stimate", fmt_it(ore_stimata, 0))
+
 
 # =========================
 # TAB 3: Dettaglio reparto + persone
@@ -1277,30 +1673,26 @@ with tab3:
         rA[2].metric(
             "Teste − FTE",
             fmt_it(gap_fte_teste, 2),
-            delta=gap_fte_disp_vs_teste if not np.isnan(gap_fte_disp_vs_teste) else None,
-            delta_color="normal",
         )
+        rA[2].markdown(delta_pill(gap_fte_disp_vs_teste, 2), unsafe_allow_html=True)
         rA[3].metric(
             "FTE disponibili",
             fmt_it(fte_disp, 2),
-            delta=delta_fte_disp if not np.isnan(delta_fte_disp) else None,
-            delta_color="normal",
         )
+        rA[3].markdown(delta_pill(delta_fte_disp, 2), unsafe_allow_html=True)
 
         rB = st.columns(4)
         rB[0].metric("Ore teoriche (h)", fmt_it(ore_teo, 0))
         rB[1].metric(
             "Ore lavorate (h)",
             fmt_it(ore_lav, 0),
-            delta=ore_gap if not np.isnan(ore_gap) else None,
-            delta_color="normal",
         )
+        rB[1].markdown(delta_pill(ore_gap, 2), unsafe_allow_html=True)
         rB[2].metric(
             "Copertura ore (%)",
             fmt_it(copertura, 1, "%"),
-            delta=(copertura - 100) if not np.isnan(copertura) else None,
-            delta_color="normal",
         )
+        rB[2].markdown(delta_pill((copertura - 100), 2), unsafe_allow_html=True)
         rB[3].metric("Straordinario+Festivi (h/FTE)", fmt_it(st_x, 2))
 
         rC = st.columns(3)
@@ -1499,3 +1891,4 @@ with tab3:
             st.plotly_chart(fig_caus_rep, use_container_width=True)
         else:
             st.info("Breakdown causali non disponibile per questo reparto.")
+

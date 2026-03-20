@@ -10,6 +10,165 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Cruscotto Dotazioni Organiche", layout="wide")
 
+ACCENT = "#1b7f5a"
+ACCENT_2 = "#0f5f43"
+BG_SOFT = "#f5faf7"
+CARD = "#ffffff"
+TEXT = "#0b1a12"
+MUTED = "#5b6b63"
+BORDER = "rgba(28, 59, 44, 0.12)"
+GREEN_SEQUENCE = ["#dff2e8", "#9fd5bc", "#5ab188", "#1b7f5a", "#0f5f43"]
+GREEN_SCALE = [
+    [0.0, "#f5faf7"],
+    [0.25, "#dff2e8"],
+    [0.5, "#9fd5bc"],
+    [0.75, "#1b7f5a"],
+    [1.0, "#0f5f43"],
+]
+QUADRANT_COLORS = {
+    "Alto X / Alto Y": "#0f5f43",
+    "Alto X / Basso Y": "#1b7f5a",
+    "Basso X / Alto Y": "#5ab188",
+    "Basso X / Basso Y": "#9fd5bc",
+}
+
+APP_CSS = """
+<style>
+:root{
+  --accent:#1b7f5a;
+  --accent-2:#0f5f43;
+  --bg-soft:#f5faf7;
+  --card:#ffffff;
+  --text:#0b1a12;
+  --muted:#5b6b63;
+  --border:rgba(28, 59, 44, 0.12);
+}
+
+.app-title{
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  margin-bottom: 0.2rem;
+  font-size: 2rem;
+}
+.app-subtitle{
+  color: var(--muted);
+  margin-top: 0;
+  margin-bottom: 0.6rem;
+}
+
+.card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  box-shadow: 0 1px 10px rgba(0,0,0,0.03);
+  margin-bottom: 0.8rem;
+}
+
+.pill{
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  color: var(--accent-2);
+  margin-right: 0.35rem;
+  margin-bottom: 0.25rem;
+}
+
+.hint{
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+html, body, [class*="css"] {
+  color: var(--text);
+}
+
+.block-container {
+  padding-top: 1.2rem;
+}
+
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #fbfefc 0%, #f5faf7 100%);
+  border-right: 1px solid var(--border);
+}
+
+[data-testid="stMetric"],
+div[data-testid="stExpander"],
+div[data-testid="stDataFrame"],
+section[data-testid="stFileUploaderDropzone"],
+[data-testid="stDateInputField"],
+[data-testid="stNumberInputField"],
+[data-testid="stTextInputRootElement"],
+[data-baseweb="select"],
+.stTabs [data-baseweb="tab-list"] {
+  border-radius: 16px;
+}
+
+[data-testid="stMetric"],
+div[data-testid="stExpander"],
+div[data-testid="stDataFrame"],
+section[data-testid="stFileUploaderDropzone"] {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 10px rgba(0,0,0,0.03);
+}
+
+.stTabs [data-baseweb="tab"] {
+  border-radius: 12px;
+}
+
+.stTabs [aria-selected="true"] {
+  background: var(--bg-soft);
+  color: var(--accent-2);
+}
+
+.stButton > button,
+.stDownloadButton > button {
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: white;
+}
+
+.stMultiSelect div[data-baseweb="tag"] {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+
+.stMultiSelect div[data-baseweb="tag"] span {
+  color: var(--accent-2);
+}
+</style>
+"""
+
+
+def apply_app_css():
+    st.markdown(APP_CSS, unsafe_allow_html=True)
+
+
+def apply_green_layout(fig):
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor=CARD,
+        plot_bgcolor=CARD,
+        font=dict(color=TEXT),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(gridcolor="rgba(27,127,90,0.10)", zeroline=False)
+    return fig
+
 
 # =========================
 # UTIL
@@ -85,7 +244,8 @@ def z(df: pd.DataFrame) -> pd.Series:
 
 
 def style_red_black(fig):
-    fig.update_traces(marker_color="red", marker_line_color="black", marker_line_width=1)
+    apply_green_layout(fig)
+    fig.update_traces(marker_color=ACCENT, marker_line_color=ACCENT_2, marker_line_width=1)
     return fig
 
 
@@ -166,7 +326,7 @@ def fmt_df_it(df: pd.DataFrame, decimals_map=None) -> pd.DataFrame:
     return out
 
 def delta_pill(delta, decimals=2):
-    """Ritorna una 'pill' HTML (rosso/verde) con freccia e valore assoluto con N decimali."""
+    """Ritorna una 'pill' HTML coerente con il tema verde, con freccia e valore assoluto."""
     if delta is None:
         return ""
     try:
@@ -180,12 +340,11 @@ def delta_pill(delta, decimals=2):
     is_neg = delta < 0
     arrow = "↑" if is_pos else ("↓" if is_neg else "→")
 
-    # colori in stile Bootstrap-ish, leggibili su tema scuro
-    fg = "rgb(25, 135, 84)" if is_pos else ("rgb(220, 53, 69)" if is_neg else "rgb(108, 117, 125)")
-    bg = "rgba(25, 135, 84, 0.25)" if is_pos else ("rgba(220, 53, 69, 0.25)" if is_neg else "rgba(108, 117, 125, 0.25)")
+    fg = ACCENT_2 if is_pos else (MUTED if is_neg else MUTED)
+    bg = "rgba(27,127,90,0.18)" if is_pos else ("rgba(91,107,99,0.16)" if is_neg else "rgba(91,107,99,0.12)")
 
     txt = fmt_it(abs(delta), decimals)
-    return f'<span style="display:inline-block;padding:0.20rem 0.60rem;border-radius:999px;font-weight:600;font-size:0.85rem;background:{bg};color:{fg};">{arrow} {txt}</span>'
+    return f'<span style="display:inline-block;padding:0.20rem 0.60rem;border-radius:999px;font-weight:600;font-size:0.85rem;background:{bg};color:{fg};border:1px solid {BORDER};">{arrow} {txt}</span>'
 
 
 # =========================
@@ -802,7 +961,9 @@ def build_people_table(df_sub: pd.DataFrame, ore_annue_fte: float):
 # =========================
 # UI
 # =========================
-st.title("Cruscotto Dotazioni Organiche")
+apply_app_css()
+st.markdown('<div class="app-title">Cruscotto Dotazioni Organiche</div>', unsafe_allow_html=True)
+st.markdown('<p class="app-subtitle">Dashboard interattiva per analisi dotazioni, assenze, ferie e straordinari con tema visivo verde uniforme.</p>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("📤 Caricamento")
@@ -868,7 +1029,6 @@ col_dip = find_col(df_raw, ["DESC. DIP.", "DESC DIP"], contains=True)
 col_stab = find_col(df_raw, ["STABILIMENTO"], contains=True)
 col_cdr = find_col(df_raw, ["CDR_DESC", "CDR DESC", "CDR"], contains=True)
 col_rep = find_col(df_raw, ["REPARTO"], contains=True)
-col_prof = find_col(df_raw, ["PROFILO"], contains=True)
 col_qual = find_col(df_raw, ["QUALIFICA.1", "QUALIFICA"], contains=True)
 col_ruolo = find_col(df_raw, ["DESC. RUOLO", "RUOLO"], contains=True)
 
@@ -1029,83 +1189,56 @@ with st.sidebar:
     st.divider()
     st.header("Filtri")
 
-    st.caption("Scegli se filtrare per Dipartimento (DESC. DIP) oppure per Area funzionale DAPSS (mappa da CDC/COD.REP.).")
-
     def opts(col):
         if not col:
             return []
-        # col può essere nome colonna (str) oppure variabile già risolta
         c = col if isinstance(col, str) else col
         if isinstance(c, str) and c in df_raw.columns:
             return sorted(df_raw[c].dropna().astype(str).unique())
         return []
 
-    dip_opts = opts(col_dip)
     stab_opts = opts(col_stab_used)
     cdr_opts = opts(col_cdr)
     rep_opts = opts(col_rep)
-    prof_opts = opts(col_prof)
     qual_opts = opts(col_qual)
     ruolo_opts = opts(col_ruolo)
     dapss_opts = opts("DAPSS_AREA") if "DAPSS_AREA" in df_raw.columns else []
 
-    filtro_org = st.sidebar.radio(
-        "Filtro organizzativo principale",
-        ["Dipartimento (DESC. DIP)", "Area funzionale DAPSS (CDC)"],
-        index=0,
-        key="filtro_org",
-    )
+    st.markdown("**Area funzionale DAPSS (CDC)**")
+    with st.sidebar.expander("🗺️ Mappa CDC → Area DAPSS (override facoltativo)"):
+        st.caption("Formato: AREA<TAB>cdc1,c2,c3 (una riga per area). Esempio: AREA CHIRURGICA	116,320,321")
+        override_txt = st.text_area("Override mappa", value="", height=110)
+        override_map = parse_dapss_override(override_txt)
+        if override_map and "_CDC_CODE" in df_raw.columns:
+            _map = {**DAPSS_DEFAULT, **override_map}
+            df_raw["DAPSS_AREA"] = df_raw["_CDC_CODE"].map(_map).fillna("NON MAPPATO")
+            dapss_opts = sorted(df_raw["DAPSS_AREA"].dropna().astype(str).unique())
 
-    # Dipartimento vs DAPSS
-    if filtro_org.startswith("Dipartimento"):
-        dip_sel = st.sidebar.multiselect("Dipartimento", dip_opts, default=dip_opts) if dip_opts else []
-        dapss_sel = []
-    else:
-        dip_sel = dip_opts  # non filtrare per dipartimento
-        # override facoltativo della mappa CDC->DAPSS
-        with st.sidebar.expander("🗺️ Mappa CDC → Area DAPSS (override facoltativo)"):
-            st.caption("Formato: AREA<TAB>cdc1,c2,c3 (una riga per area). Esempio: AREA CHIRURGICA\t116,320,321")
-            override_txt = st.text_area("Override mappa", value="", height=110)
-            override_map = parse_dapss_override(override_txt)
-            if override_map and "_CDC_CODE" in df_raw.columns:
-                _map = {**DAPSS_DEFAULT, **override_map}
-                df_raw["DAPSS_AREA"] = df_raw["_CDC_CODE"].map(_map).fillna("NON MAPPATO")
-                dapss_opts = sorted(df_raw["DAPSS_AREA"].dropna().astype(str).unique())
+    default_dapss = [x for x in dapss_opts if x != "NON MAPPATO"]
+    dapss_sel = st.sidebar.multiselect("Area DAPSS", dapss_opts, default=default_dapss) if dapss_opts else []
 
-        default_dapss = [x for x in dapss_opts if x != "NON MAPPATO"]
-        dapss_sel = st.sidebar.multiselect("Area DAPSS", dapss_opts, default=default_dapss) if dapss_opts else []
+    if "_CDC_CODE" in df_raw.columns and "DAPSS_AREA" in df_raw.columns:
+        unmapped = sorted(df_raw.loc[df_raw["DAPSS_AREA"] == "NON MAPPATO", "_CDC_CODE"].dropna().astype(int).unique().tolist())
+        if len(unmapped) > 0:
+            st.sidebar.info(f"CDC non mappati: {len(unmapped)} (es. {', '.join(map(str, unmapped[:10]))}{'...' if len(unmapped) > 10 else ''})")
 
-        if "_CDC_CODE" in df_raw.columns and "DAPSS_AREA" in df_raw.columns:
-            unmapped = sorted(df_raw.loc[df_raw["DAPSS_AREA"] == "NON MAPPATO", "_CDC_CODE"].dropna().astype(int).unique().tolist())
-            if len(unmapped) > 0:
-                st.sidebar.info(f"CDC non mappati: {len(unmapped)} (es. {', '.join(map(str, unmapped[:10]))}{'...' if len(unmapped) > 10 else ''})")
-
-    # altri filtri
     stab_sel = st.sidebar.multiselect("Stabilimento", stab_opts, default=stab_opts) if stab_opts else []
     cdr_sel = st.sidebar.multiselect("CDR_DESC", cdr_opts, default=cdr_opts) if cdr_opts else []
     rep_sel = st.sidebar.multiselect("Reparto", rep_opts, default=rep_opts) if rep_opts else []
 
     st.markdown("**Filtri professionali**")
-    prof_sel = st.sidebar.multiselect("Profilo", prof_opts, default=prof_opts) if prof_opts else []
     qual_sel = st.sidebar.multiselect("Qualifica", qual_opts, default=qual_opts) if qual_opts else []
     ruolo_sel = st.sidebar.multiselect("Ruolo", ruolo_opts, default=ruolo_opts) if ruolo_opts else []
 # applica filtri
 df_f = df_raw.copy()
-# filtro organizzativo principale
-if filtro_org.startswith("Dipartimento"):
-    if col_dip and dip_sel:
-        df_f = df_f[df_f[col_dip].astype(str).isin(dip_sel)]
-else:
-    if "DAPSS_AREA" in df_f.columns and dapss_sel:
-        df_f = df_f[df_f["DAPSS_AREA"].astype(str).isin(dapss_sel)]
+if "DAPSS_AREA" in df_f.columns and dapss_sel:
+    df_f = df_f[df_f["DAPSS_AREA"].astype(str).isin(dapss_sel)]
 if col_stab_used and stab_sel:
     df_f = df_f[df_f[col_stab_used].astype(str).isin(stab_sel)]
 if col_cdr and cdr_sel:
     df_f = df_f[df_f[col_cdr].astype(str).isin(cdr_sel)]
 if col_rep and rep_sel:
     df_f = df_f[df_f[col_rep].astype(str).isin(rep_sel)]
-if col_prof and prof_sel:
-    df_f = df_f[df_f[col_prof].astype(str).isin(prof_sel)]
 if col_qual and qual_sel:
     df_f = df_f[df_f[col_qual].astype(str).isin(qual_sel)]
 if col_ruolo and ruolo_sel:
@@ -1252,7 +1385,8 @@ with tab2:
             hover_name=dim_label,
             title=f"{y_metric} vs {x_metric} (bolla={size_metric})"
         )
-        fig_sc.update_traces(marker=dict(color="red", line=dict(color="black", width=1)))
+        apply_green_layout(fig_sc)
+        fig_sc.update_traces(marker=dict(color=ACCENT, line=dict(color=ACCENT_2, width=1)))
         st.plotly_chart(fig_sc, use_container_width=True)
 
     st.divider()
@@ -1309,14 +1443,14 @@ with tab2:
                 title=f"Assenze per blocco (ore) – Top {top_n} {dim_label}"
             )
             fig_abs.update_layout(xaxis_tickangle=45, yaxis_title="ore")
-            # Stile richiesto: rosso/rosino con bordo nero
+            apply_green_layout(fig_abs)
             _colors = {
-                "MAL_104_ECC_ORE": "rgb(220, 53, 69)",        # rosso
-                "ASP_GRAV_PUER_DIST_ORE": "rgb(255, 182, 193)" # rosino
+                "MAL_104_ECC_ORE": "#1b7f5a",
+                "ASP_GRAV_PUER_DIST_ORE": "#9fd5bc"
             }
             for _tr in fig_abs.data:
                 try:
-                    _tr.marker.line.color = "black"
+                    _tr.marker.line.color = ACCENT_2
                     _tr.marker.line.width = 1
                     if _tr.name in _colors:
                         _tr.marker.color = _colors[_tr.name]
@@ -1344,8 +1478,11 @@ with tab2:
                     df_tm,
                     path=[dim_label, "QUALIFICA_OUT"],
                     values="FTE",
+                    color="FTE",
+                    color_continuous_scale=GREEN_SCALE,
                     title=f"Composizione FTE per {dim_label} e qualifica"
                 )
+                apply_green_layout(fig_tm)
                 st.plotly_chart(fig_tm, use_container_width=True)
         else:
             st.info("FTE/Qualifica non disponibili per la treemap.")
@@ -1384,14 +1521,13 @@ with tab2:
                 df_norm,
                 aspect="auto",
                 title=f"Matrice KPI normalizzata (0–1) – Top {top_n} {dim_label}",
-                color_continuous_scale=[[0, "white"], [1, "red"]],
+                color_continuous_scale=GREEN_SCALE,
             )
-            # Bordi neri: usa gap tra celle e sfondo nero
             fig_h.update_traces(xgap=2, ygap=2)
             fig_h.update_layout(
-                plot_bgcolor="black",
-                paper_bgcolor="black",
-                font=dict(color="white"),
+                plot_bgcolor=BG_SOFT,
+                paper_bgcolor=CARD,
+                font=dict(color=TEXT),
                 coloraxis_showscale=True,
             )
             st.plotly_chart(fig_h, use_container_width=True)
@@ -1460,13 +1596,15 @@ with tab2:
                 x=xcol,
                 y=ycol,
                 color="QUADRANTE",
+                color_discrete_map=QUADRANT_COLORS,
                 size="FTE",
                 hover_name=dim_label,
                 title=f"Quadranti: {qy} vs {qx} (linee: {cut_mode.lower()})",
             )
-            fig_q.update_traces(marker=dict(line=dict(color="black", width=1)))
-            fig_q.add_shape(type="line", x0=x_cut, x1=x_cut, y0=df_q[ycol].min(), y1=df_q[ycol].max(), line=dict(dash="dash"))
-            fig_q.add_shape(type="line", x0=df_q[xcol].min(), x1=df_q[xcol].max(), y0=y_cut, y1=y_cut, line=dict(dash="dash"))
+            apply_green_layout(fig_q)
+            fig_q.update_traces(marker=dict(line=dict(color=ACCENT_2, width=1)))
+            fig_q.add_shape(type="line", x0=x_cut, x1=x_cut, y0=df_q[ycol].min(), y1=df_q[ycol].max(), line=dict(color=ACCENT_2, dash="dash"))
+            fig_q.add_shape(type="line", x0=df_q[xcol].min(), x1=df_q[xcol].max(), y0=y_cut, y1=y_cut, line=dict(color=ACCENT_2, dash="dash"))
 
             st.plotly_chart(fig_q, use_container_width=True)
 
@@ -1507,7 +1645,7 @@ with tab2:
                 x=df_head[dim_label],
                 y=df_head["ASSENZE_ORE"],
                 name="Assenze (ore)",
-                marker=dict(color="red", line=dict(color="black", width=1)),
+                marker=dict(color=ACCENT, line=dict(color=ACCENT_2, width=1)),
             ))
             fig_p.add_trace(go.Scatter(
                 x=df_head[dim_label],
@@ -1515,7 +1653,10 @@ with tab2:
                 name="Cumulata (%)",
                 mode="lines+markers",
                 yaxis="y2",
+                line=dict(color=ACCENT_2, width=3),
+                marker=dict(color=ACCENT_2, size=8),
             ))
+            apply_green_layout(fig_p)
             fig_p.update_layout(
                 title=f"Pareto assenze (ore) – Top {pareto_n} {dim_label} (+ Altri)",
                 xaxis=dict(tickangle=45),
@@ -1572,11 +1713,11 @@ with tab2:
                     hover_data=["PERSONA", "FTE"] if "PERSONA" in df_box.columns else ["FTE"],
                     title=f"Assenteismo individuale (%) – Top {box_n} {dim_label} (per FTE)",
                 )
-                # Stile richiesto: box ROSSI, bordo/scatola/baffi NERI
+                apply_green_layout(fig_box)
                 fig_box.update_traces(
-                    fillcolor="red",
-                    line=dict(color="black", width=2),
-                    marker=dict(color="red", line=dict(color="black", width=1)),
+                    fillcolor="rgba(27,127,90,0.30)",
+                    line=dict(color=ACCENT_2, width=2),
+                    marker=dict(color=ACCENT, line=dict(color=ACCENT_2, width=1)),
                 )
                 fig_box.update_layout(xaxis_tickangle=45, yaxis_title="%")
                 st.plotly_chart(fig_box, use_container_width=True)
@@ -1877,4 +2018,3 @@ with tab3:
             st.plotly_chart(fig_caus_rep, use_container_width=True)
         else:
             st.info("Breakdown causali non disponibile per questo reparto.")
-

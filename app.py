@@ -42,6 +42,7 @@ APP_CSS = """
   --text:#0b1a12;
   --muted:#5b6b63;
   --border:rgba(28, 59, 44, 0.12);
+  --primary-color:#1b7f5a;
 }
 
 .app-title{
@@ -124,6 +125,13 @@ section[data-testid="stFileUploaderDropzone"] {
 .stTabs [aria-selected="true"] {
   background: var(--bg-soft);
   color: var(--accent-2);
+  border-bottom: 2px solid var(--accent) !important;
+}
+
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-testid="stDecoration"],
+.stTabs div[role="tablist"] + div {
+  background: var(--accent) !important;
 }
 
 .stButton > button,
@@ -141,13 +149,40 @@ section[data-testid="stFileUploaderDropzone"] {
   color: white;
 }
 
-.stMultiSelect div[data-baseweb="tag"] {
-  background: var(--bg-soft);
-  border: 1px solid var(--border);
+.stMultiSelect div[data-baseweb="tag"],
+[data-baseweb="tag"] {
+  background: var(--accent) !important;
+  border: 1px solid var(--accent) !important;
 }
 
-.stMultiSelect div[data-baseweb="tag"] span {
-  color: var(--accent-2);
+.stMultiSelect div[data-baseweb="tag"] span,
+[data-baseweb="tag"] span,
+[data-baseweb="tag"] svg,
+[data-baseweb="tag"] path,
+[data-baseweb="tag"] button {
+  color: #ffffff !important;
+  fill: #ffffff !important;
+}
+
+input[type="range"],
+.stSlider {
+  accent-color: var(--accent) !important;
+}
+
+div[data-baseweb="slider"] [role="slider"] {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent) !important;
+}
+
+div[data-baseweb="slider"] > div div {
+  background-color: var(--accent);
+}
+
+[data-testid="stSidebar"] input[type="checkbox"],
+[data-testid="stSidebar"] input[type="radio"],
+[data-testid="stSidebar"] input[type="range"] {
+  accent-color: var(--accent) !important;
 }
 </style>
 """
@@ -978,7 +1013,7 @@ with st.sidebar:
     st.divider()
     st.header("⚙️ Opzioni")
     only_in_force = st.toggle("Solo in forza a fine periodo (DATA AL max)", value=False)
-    use_stab_cdc = st.toggle("Usa mappa Stabilimento (CDC→Stabilimento)", value=True)
+    use_stab_cdc = False
 
 if not uploaded:
     st.info("Carica un file Excel dalla sidebar per iniziare.")
@@ -992,17 +1027,7 @@ df_raw, meta, sheet_names = load_excel_smart(file_bytes)
 with st.sidebar:
     st.divider()
     st.header("Lettura Excel")
-    override = st.checkbox("Override manuale (foglio + riga header)", value=False)
-
-if override:
-    with st.sidebar:
-        sheet_override = st.selectbox(
-            "Foglio",
-            sheet_names,
-            index=sheet_names.index(meta["sheet"]) if meta["sheet"] in sheet_names else 0
-        )
-        header_override = st.number_input("Riga header (0=prima riga)", min_value=0, max_value=300, value=int(meta["header_row"]), step=1)
-    df_raw, meta, sheet_names = load_excel_smart(file_bytes, sheet_override, int(header_override))
+    st.caption(f"Foglio rilevato: {meta['sheet']} · header riga {meta['header_row']}")
 
 with st.expander("🔎 Debug lettura Excel"):
     st.write(meta)
@@ -1124,28 +1149,6 @@ DAPSS_DEFAULT = {
     2814: "SERVIZI DISTRETTUALI E COT",
 }
 
-def parse_dapss_override(text: str) -> dict[int, str]:
-    mapping = {}
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # accetta: AREA<TAB>cdc1,c2,c3 oppure AREA;cdc1,c2
-        parts = re.split(r"\t|;", line, maxsplit=1)
-        if len(parts) < 2:
-            continue
-        area = parts[0].strip()
-        codes_part = parts[1].strip()
-        codes = re.split(r"[ ,]+", codes_part)
-        for c in codes:
-            c = c.strip()
-            if not c:
-                continue
-            m = re.match(r"^0*(\d+)", c)
-            if m:
-                mapping[int(m.group(1))] = area
-    return mapping
-
 # costruisce colonna DAPSS_AREA (se possibile)
 if col_cdc:
     df_raw["_CDC_CODE"] = df_raw[col_cdc].apply(_cdc_to_int)
@@ -1194,7 +1197,14 @@ with st.sidebar:
             return []
         c = col if isinstance(col, str) else col
         if isinstance(c, str) and c in df_raw.columns:
-            return sorted(df_raw[c].dropna().astype(str).unique())
+            vals = (
+                df_raw[c]
+                .dropna()
+                .astype(str)
+                .str.strip()
+            )
+            vals = vals[(vals != "") & (vals.str.lower() != "nan")]
+            return sorted(vals.unique())
         return []
 
     stab_opts = opts(col_stab_used)
@@ -1205,22 +1215,8 @@ with st.sidebar:
     dapss_opts = opts("DAPSS_AREA") if "DAPSS_AREA" in df_raw.columns else []
 
     st.markdown("**Area funzionale DAPSS (CDC)**")
-    with st.sidebar.expander("🗺️ Mappa CDC → Area DAPSS (override facoltativo)"):
-        st.caption("Formato: AREA<TAB>cdc1,c2,c3 (una riga per area). Esempio: AREA CHIRURGICA	116,320,321")
-        override_txt = st.text_area("Override mappa", value="", height=110)
-        override_map = parse_dapss_override(override_txt)
-        if override_map and "_CDC_CODE" in df_raw.columns:
-            _map = {**DAPSS_DEFAULT, **override_map}
-            df_raw["DAPSS_AREA"] = df_raw["_CDC_CODE"].map(_map).fillna("NON MAPPATO")
-            dapss_opts = sorted(df_raw["DAPSS_AREA"].dropna().astype(str).unique())
-
-    default_dapss = [x for x in dapss_opts if x != "NON MAPPATO"]
-    dapss_sel = st.sidebar.multiselect("Area DAPSS", dapss_opts, default=default_dapss) if dapss_opts else []
-
-    if "_CDC_CODE" in df_raw.columns and "DAPSS_AREA" in df_raw.columns:
-        unmapped = sorted(df_raw.loc[df_raw["DAPSS_AREA"] == "NON MAPPATO", "_CDC_CODE"].dropna().astype(int).unique().tolist())
-        if len(unmapped) > 0:
-            st.sidebar.info(f"CDC non mappati: {len(unmapped)} (es. {', '.join(map(str, unmapped[:10]))}{'...' if len(unmapped) > 10 else ''})")
+    dapss_opts = [x for x in dapss_opts if x != "NON MAPPATO"]
+    dapss_sel = st.sidebar.multiselect("Area DAPSS", dapss_opts, default=dapss_opts) if dapss_opts else []
 
     stab_sel = st.sidebar.multiselect("Stabilimento", stab_opts, default=stab_opts) if stab_opts else []
     cdr_sel = st.sidebar.multiselect("CDR_DESC", cdr_opts, default=cdr_opts) if cdr_opts else []
@@ -2018,3 +2014,4 @@ with tab3:
             st.plotly_chart(fig_caus_rep, use_container_width=True)
         else:
             st.info("Breakdown causali non disponibile per questo reparto.")
+
